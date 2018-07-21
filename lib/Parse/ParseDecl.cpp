@@ -6465,28 +6465,28 @@ Parser::parseDeclOperator(ParseDeclOptions Flags, DeclAttributes &Attributes) {
   }
 
   DebuggerContextChange DCC (*this);
-  
+
   Identifier Name = Context.getIdentifier(Tok.getText());
   SourceLoc NameLoc = consumeToken();
-    
+
   if (Attributes.hasAttribute<PostfixAttr>()) {
     if (!Name.empty() && (Name.get()[0] == '?' || Name.get()[0] == '!'))
       diagnose(NameLoc, diag::expected_operator_name_after_operator);      
   }
-  
+
   auto Result = parseDeclOperatorImpl(OperatorLoc, Name, NameLoc, Attributes);
 
   if (!DCC.movedToTopLevel() && !AllowTopLevel) {
     diagnose(OperatorLoc, diag::operator_decl_inner_scope);
     return nullptr;
   }
-  
+
   return DCC.fixupParserResult(Result);
 }
 
 ParserResult<OperatorDecl>
 Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
-                                SourceLoc NameLoc, DeclAttributes &Attributes) {
+                              SourceLoc NameLoc, DeclAttributes &Attributes) {
   bool isPrefix = Attributes.hasAttribute<PrefixAttr>();
   bool isInfix = Attributes.hasAttribute<InfixAttr>();
   bool isPostfix = Attributes.hasAttribute<PostfixAttr>();
@@ -6549,7 +6549,7 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
         consumeToken();
     }
   }
-  
+
   // Diagnose deprecated operator body syntax `operator + { ... }`.
   SourceLoc lBraceLoc;
   if (consumeIf(tok::l_brace, lBraceLoc)) {
@@ -6571,7 +6571,7 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
     skipUntilDeclRBrace();
     (void) consumeIf(tok::r_brace);
   }
-  
+
   OperatorDecl *res;
   if (Attributes.hasAttribute<PrefixAttr>())
     res = new (Context)
@@ -6588,7 +6588,7 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
                           secondIdentifierName, secondIdentifierNameLoc);
 
   diagnoseOperatorFixityAttributes(*this, Attributes, res);
-  
+
   res->getAttrs() = Attributes;
   return makeParserResult(res);
 }
@@ -6608,7 +6608,7 @@ Parser::parseDeclPrecedenceGroup(ParseDeclOptions flags,
   Identifier name;
   SourceLoc nameLoc;
   if (parseIdentifier(name, nameLoc, diag::expected_precedencegroup_name)) {
-    // If the identifier is missing or a keyword or something, try to skip
+    // If the identifier is missing or a keyword or something, try to
     // skip the entire body.
     if (consumeIf(tok::l_brace)) {
       skipUntilDeclRBrace();
@@ -6818,7 +6818,7 @@ Parser::parseDeclPrecedenceGroup(ParseDeclOptions flags,
       SyntaxContext->collectNodesInPlace(SyntaxKind::PrecedenceGroupNameList);
       continue;
     }
-    
+
     diagnose(Tok, diag::unknown_precedencegroup_attribute, attrName);
     return abortBody();
   }
