@@ -15,6 +15,7 @@ set(sources
   SwiftStddef.h
   SwiftStdint.h
   System.h
+  Target.h
   ThreadLocalStorage.h
   UnicodeShims.h
   Visibility.h
