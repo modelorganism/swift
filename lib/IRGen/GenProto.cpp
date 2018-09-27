@@ -3564,7 +3564,8 @@ irgen::emitAssociatedTypeMetadataRef(IRGenFunction &IGF,
                                        wtable,
                                        parentMetadata,
                                        assocTypeDescriptor });
-
+  call->setDoesNotThrow();
+  call->setDoesNotAccessMemory();
   return MetadataResponse::handle(IGF, request, call);
 }
 
