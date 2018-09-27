@@ -1374,7 +1374,8 @@ llvm::Value *uniqueForeignWitnessTableRef(IRGenFunction &IGF,
           ->getCanonicalType();
       if (associate->hasTypeParameter())
         RequiresSpecialization = true;
-      llvm::Constant *witness = IGM.getAssociatedTypeWitness(associate);
+      llvm::Constant *witness =
+          IGM.getAssociatedTypeWitness(associate, /*inProtocolContext=*/false);
       Table.addBitCast(witness, IGM.Int8PtrTy);
     }
 
@@ -1503,19 +1504,23 @@ void WitnessTableBuilder::build() {
   TableSize = Table.size();
 }
 
-llvm::Constant *IRGenModule::getAssociatedTypeWitness(CanType type) {
+llvm::Constant *IRGenModule::getAssociatedTypeWitness(CanType type,
+                                                      bool inProtocolContext) {
   // FIXME: If we can directly reference constant type metadata, do so.
 
   // Form a reference to the mangled name for this type.
   assert(!type->hasArchetype() && "type cannot contain archetypes");
-  auto typeRef = getTypeRef(type, /*alignment=*/2);
+  auto typeRef = getTypeRef(type, /*alignment=*/4);
 
   // Set the low bit to indicate that this is a mangled name.
   auto witness = llvm::ConstantExpr::getPtrToInt(typeRef, IntPtrTy);
-  auto bit = llvm::ConstantInt::get(
-               IntPtrTy,
-               ProtocolRequirementFlags::AssociatedTypeMangledNameMask);
-  witness = llvm::ConstantExpr::getAdd(witness, bit);
+  unsigned bits = ProtocolRequirementFlags::AssociatedTypeMangledNameBit;
+  if (inProtocolContext) {
+    bits |= ProtocolRequirementFlags::AssociatedTypeProtocolContextBit;
+  }
+
+  auto bitsConstant = llvm::ConstantInt::get(IntPtrTy, bits);
+  witness = llvm::ConstantExpr::getAdd(witness, bitsConstant);
   return llvm::ConstantExpr::getIntToPtr(witness, Int8PtrTy);
 }
 
@@ -1829,7 +1834,8 @@ llvm::Constant *WitnessTableBuilder::emitResilientWitnessTable() {
       auto associate = Conformance.getTypeWitness(assocType, nullptr)
           ->getCanonicalType();
 
-      llvm::Constant *witness = IGM.getAssociatedTypeWitness(associate);
+      llvm::Constant *witness =
+          IGM.getAssociatedTypeWitness(associate, /*inProtocolContext=*/false);
       table.addRelativeAddress(witness);
       continue;
     }
