@@ -2241,6 +2241,7 @@ void IRGenModule::emitProtocolConformance(
           getAddrOfProtocolConformanceDescriptor(conformance,
                                                  init.finishAndCreateFuture()));
   var->setConstant(true);
+  setTrueConstGlobal(var);
 }
 
 void IRGenModule::ensureRelativeSymbolCollocation(SILWitnessTable &wt) {
