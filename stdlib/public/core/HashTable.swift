@@ -228,6 +228,7 @@ extension _HashTable: Sequence {
     var word: Word
 
     @inlinable
+    @inline(__always)
     init(_ hashTable: _HashTable) {
       self.hashTable = hashTable
       self.wordIndex = 0
@@ -255,6 +256,7 @@ extension _HashTable: Sequence {
   }
 
   @inlinable
+  @inline(__always)
   internal func makeIterator() -> Iterator {
     return Iterator(self)
   }
