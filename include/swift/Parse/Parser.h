@@ -345,6 +345,74 @@ public:
   /// Current syntax parsing context where call backs should be directed to.
   SyntaxParsingContext *SyntaxContext;
 
+  class EphemeralParseContext {
+  public:
+    typedef unsigned SquareBracketLoc;
+
+  private:
+    llvm::DenseMap<SquareBracketLoc, bool> SquareBracketFlavors;
+    int RefCount;
+    unsigned BufferID;
+
+  public:
+    SquareBracketLoc TranslateLoc(Parser &P, SourceLoc Loc) {
+      assert(BufferID == P.SourceMgr.findBufferContainingLoc(Loc) &&
+             "square-bracket sub-experssions are assumed not to cross files!");
+      return P.SourceMgr.getLocOffsetInBuffer(Loc, BufferID);
+    }
+
+    enum SquareBracketFlavor {
+      SquareBracketFlavorUnSet,
+      SquareBracketFlavorArray,
+      SquareBracketFlavorDictionary
+    };
+    void SetSquareBracketFlavor(SquareBracketLoc Loc, bool IsDict) {
+      SquareBracketFlavors[Loc] = IsDict;
+    }
+    SquareBracketFlavor GetSquareBracketFlavor(SquareBracketLoc Loc) {
+      auto i = SquareBracketFlavors.find(Loc);
+      if (i == SquareBracketFlavors.end())
+        return SquareBracketFlavorUnSet;
+      else
+        return i->second ? SquareBracketFlavorDictionary
+                         : SquareBracketFlavorArray;
+    }
+
+    class RAII {
+      Parser &P;
+
+    public:
+      RAII(Parser &P) : P(P) {
+        auto &ctx = P.EphemeralContext;
+        if (ctx.RefCount == 0) {
+          ctx.BufferID = P.SourceMgr.findBufferContainingLoc(
+              P.getParserPosition().PreviousLoc);
+        }
+        ++ctx.RefCount;
+      }
+      ~RAII() {
+        auto &ctx = P.EphemeralContext;
+        --ctx.RefCount;
+        if (ctx.RefCount == 0) {
+          ctx.SquareBracketFlavors.shrink_and_clear();
+        }
+      }
+      void SetSquareBracketFlavor(ParserPosition Pos, bool IsDict) {
+        auto &ctx = P.EphemeralContext;
+        SourceLoc Loc = Pos.PreviousLoc;
+        SquareBracketLoc SBLoc = ctx.TranslateLoc(P, Loc);
+        ctx.SetSquareBracketFlavor(SBLoc, IsDict);
+      }
+      SquareBracketFlavor GetSquareBracketFlavor(ParserPosition Pos) {
+        auto &ctx = P.EphemeralContext;
+        SourceLoc Loc = Pos.PreviousLoc;
+        SquareBracketLoc SBLoc = ctx.TranslateLoc(P, Loc);
+        return ctx.GetSquareBracketFlavor(SBLoc);
+      }
+    };
+  };
+  EphemeralParseContext EphemeralContext;
+
 public:
   Parser(unsigned BufferID, SourceFile &SF, DiagnosticEngine* LexerDiags,
          SILParserTUStateBase *SIL,

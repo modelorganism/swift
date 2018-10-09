@@ -3248,6 +3248,16 @@ ParserResult<Expr> Parser::parseExprCollection() {
   }
 
   bool ParseDict;
+
+  EphemeralParseContext::RAII EphemeralContextRAII(*this);
+
+  auto SQExprStart = getParserPosition();
+  auto f = EphemeralContextRAII.GetSquareBracketFlavor(SQExprStart);
+  if (f == EphemeralParseContext::SquareBracketFlavorArray) {
+    ParseDict = false;
+  } else if (f == EphemeralParseContext::SquareBracketFlavorDictionary) {
+    ParseDict = true;
+  } else // Don't know yet, first time parsing this
   {
     BacktrackingScope Scope(*this);
     auto HasDelayedDecl = State->hasDelayedDecl();
@@ -3266,6 +3276,7 @@ ParserResult<Expr> Parser::parseExprCollection() {
       State->takeDelayedDeclState();
     // If we have a ':', this is a dictionary literal.
     ParseDict = Tok.is(tok::colon);
+    EphemeralContextRAII.SetSquareBracketFlavor(SQExprStart, ParseDict);
   }
 
   if (ParseDict) {
