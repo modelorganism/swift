@@ -1477,7 +1477,11 @@ static bool diagnoseAvailability(IdentTypeRepr *IdType,
   auto componentRange = IdType->getComponentRange();
   for (auto comp : componentRange) {
     if (auto *typeDecl = comp->getBoundDecl()) {
+<<<<<<< HEAD
       // FIXME: Need to eliminate the type checker argument.
+=======
+      assert(ctx.getLazyResolver() && "Must have a type checker!");
+>>>>>>> upstream/master
       TypeChecker &tc = static_cast<TypeChecker &>(*ctx.getLazyResolver());
       if (diagnoseDeclAvailability(typeDecl, tc, DC, comp->getIdLoc(),
                                    AllowPotentiallyUnavailableProtocol,
