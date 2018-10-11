@@ -345,41 +345,50 @@ public:
   /// Current syntax parsing context where call backs should be directed to.
   SyntaxParsingContext *SyntaxContext;
 
+  // Save the results of discovering whether a given '[' is the start of
+  // an Array or a Dictionary. Remembering this prevents us from having to
+  // parse the first sub-expr in square brackets {2^n} times,
+  // where n is # of nested square brackets.
   class EphemeralParseContext {
-  public:
     typedef unsigned SquareBracketLoc;
 
-  private:
     llvm::DenseMap<SquareBracketLoc, bool> SquareBracketFlavors;
     int RefCount;
     unsigned BufferID;
 
   public:
-    SquareBracketLoc TranslateLoc(Parser &P, SourceLoc Loc) {
-      assert(BufferID == P.SourceMgr.findBufferContainingLoc(Loc) &&
-             "square-bracket sub-experssions are assumed not to cross files!");
-      return P.SourceMgr.getLocOffsetInBuffer(Loc, BufferID);
-    }
+    EphemeralParseContext() : RefCount(0), BufferID(INT_MAX) {}
 
     enum SquareBracketFlavor {
-      SquareBracketFlavorUnSet,
-      SquareBracketFlavorArray,
-      SquareBracketFlavorDictionary
+      SBFlavorUnSet,
+      SBFlavorArray,
+      SBFlavorDictionary
     };
     void SetSquareBracketFlavor(SquareBracketLoc Loc, bool IsDict) {
       SquareBracketFlavors[Loc] = IsDict;
     }
+    
     SquareBracketFlavor GetSquareBracketFlavor(SquareBracketLoc Loc) {
       auto i = SquareBracketFlavors.find(Loc);
       if (i == SquareBracketFlavors.end())
-        return SquareBracketFlavorUnSet;
+        return SBFlavorUnSet;
       else
-        return i->second ? SquareBracketFlavorDictionary
-                         : SquareBracketFlavorArray;
+        return i->second ? SBFlavorDictionary
+                         : SBFlavorArray;
     }
 
     class RAII {
       Parser &P;
+      
+      /// Translate a ParserPosition into something we can use as a map key.
+      SquareBracketLoc TranslatePos(ParserPosition Pos) {
+        SourceLoc Loc = Pos.PreviousLoc;
+        assert(P.EphemeralContext.BufferID ==
+               P.SourceMgr.findBufferContainingLoc(Loc) &&
+               "square-bracket sub-experssions are assumed not to cross files!");
+        return P.SourceMgr.getLocOffsetInBuffer(Loc, P.EphemeralContext.BufferID);
+      }
+
 
     public:
       RAII(Parser &P) : P(P) {
@@ -395,18 +404,17 @@ public:
         --ctx.RefCount;
         if (ctx.RefCount == 0) {
           ctx.SquareBracketFlavors.shrink_and_clear();
+          ctx.BufferID = INT_MAX;
         }
       }
       void SetSquareBracketFlavor(ParserPosition Pos, bool IsDict) {
         auto &ctx = P.EphemeralContext;
-        SourceLoc Loc = Pos.PreviousLoc;
-        SquareBracketLoc SBLoc = ctx.TranslateLoc(P, Loc);
+        SquareBracketLoc SBLoc = TranslatePos(Pos);
         ctx.SetSquareBracketFlavor(SBLoc, IsDict);
       }
       SquareBracketFlavor GetSquareBracketFlavor(ParserPosition Pos) {
         auto &ctx = P.EphemeralContext;
-        SourceLoc Loc = Pos.PreviousLoc;
-        SquareBracketLoc SBLoc = ctx.TranslateLoc(P, Loc);
+        SquareBracketLoc SBLoc = TranslatePos(Pos);
         return ctx.GetSquareBracketFlavor(SBLoc);
       }
     };

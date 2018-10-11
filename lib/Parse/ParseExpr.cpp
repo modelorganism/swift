@@ -3253,11 +3253,11 @@ ParserResult<Expr> Parser::parseExprCollection() {
 
   auto SQExprStart = getParserPosition();
   auto f = EphemeralContextRAII.GetSquareBracketFlavor(SQExprStart);
-  if (f == EphemeralParseContext::SquareBracketFlavorArray) {
+  if (f == EphemeralParseContext::SBFlavorArray) {
     ParseDict = false;
-  } else if (f == EphemeralParseContext::SquareBracketFlavorDictionary) {
+  } else if (f == EphemeralParseContext::SBFlavorDictionary) {
     ParseDict = true;
-  } else // Don't know yet, first time parsing this
+  } else // First time parsing this or neither dict nor array
   {
     BacktrackingScope Scope(*this);
     auto HasDelayedDecl = State->hasDelayedDecl();
