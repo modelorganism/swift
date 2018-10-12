@@ -6513,9 +6513,6 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
 
       return makeParserCodeCompletionResult<OperatorDecl>();
     }
-    if (Tok.is(tok::identifier)) {
-      firstIdentifierName = Context.getIdentifier(Tok.getText());
-      firstIdentifierNameLoc = consumeToken(tok::identifier);
 
     if (Context.LangOpts.EnableOperatorDesignatedTypes) {
       if (Tok.is(tok::identifier)) {
