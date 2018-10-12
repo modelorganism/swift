@@ -81,11 +81,7 @@ bool InstrumenterBase::doTypeCheckImpl(ASTContext &Ctx, DeclContext *DC,
   DiagnosticSuppression suppression(Ctx.Diags);
   ErrorGatherer errorGatherer(Ctx.Diags);
 
-<<<<<<< HEAD
-  TypeChecker TC(Ctx);
-=======
   TypeChecker &TC = TypeChecker::createForContext(Ctx);
->>>>>>> upstream/master
 
   TC.typeCheckExpression(parsedExpr, DC);
 

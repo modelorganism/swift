@@ -50,14 +50,11 @@
 
 using namespace swift;
 
-<<<<<<< HEAD
-=======
 TypeChecker &TypeChecker::createForContext(ASTContext &ctx) {
   (void)ctx.createLazyResolverIfMissing<TypeChecker>();
   return *static_cast<TypeChecker *>(ctx.getLazyResolver());
 }
 
->>>>>>> upstream/master
 TypeChecker::TypeChecker(ASTContext &Ctx)
   : Context(Ctx), Diags(Ctx.Diags)
 {
@@ -745,12 +742,8 @@ bool swift::performTypeLocChecking(ASTContext &Ctx, TypeLoc &T,
   Optional<DiagnosticSuppression> suppression;
   if (!ProduceDiagnostics)
     suppression.emplace(Ctx.Diags);
-<<<<<<< HEAD
-  return TypeChecker(Ctx).validateType(T, resolution, options);
-=======
   TypeChecker &TC = createTypeChecker(Ctx);
   return TC.validateType(T, resolution, options);
->>>>>>> upstream/master
 }
 
 /// Expose TypeChecker's handling of GenericParamList to SIL parsing.
@@ -764,11 +757,7 @@ void swift::typeCheckCompletionDecl(Decl *D) {
   auto &Ctx = D->getASTContext();
 
   DiagnosticSuppression suppression(Ctx.Diags);
-<<<<<<< HEAD
-  TypeChecker TC(Ctx);
-=======
   TypeChecker &TC = createTypeChecker(Ctx);
->>>>>>> upstream/master
 
   if (auto ext = dyn_cast<ExtensionDecl>(D))
     TC.validateExtension(ext);
@@ -825,69 +814,29 @@ Optional<Type> swift::getTypeOfCompletionContextExpr(
                         Expr *&parsedExpr,
                         ConcreteDeclRef &referencedDecl) {
   DiagnosticSuppression suppression(Ctx.Diags);
-<<<<<<< HEAD
-
-  if (Ctx.getLazyResolver()) {
-    TypeChecker *TC = static_cast<TypeChecker *>(Ctx.getLazyResolver());
-    return ::getTypeOfCompletionContextExpr(*TC, DC, kind, parsedExpr,
-                                            referencedDecl);
-  } else {
-    TypeChecker TC(Ctx);
-    // Try to solve for the actual type of the expression.
-    return ::getTypeOfCompletionContextExpr(TC, DC, kind, parsedExpr,
-                                            referencedDecl);
-  }
-=======
   TypeChecker &TC = createTypeChecker(Ctx);
 
   // Try to solve for the actual type of the expression.
   return ::getTypeOfCompletionContextExpr(TC, DC, kind, parsedExpr,
                                           referencedDecl);
->>>>>>> upstream/master
 }
 
 bool swift::typeCheckCompletionSequence(DeclContext *DC, Expr *&parsedExpr) {
   auto &ctx = DC->getASTContext();
   DiagnosticSuppression suppression(ctx.Diags);
-<<<<<<< HEAD
-  if (ctx.getLazyResolver()) {
-    TypeChecker *TC = static_cast<TypeChecker *>(ctx.getLazyResolver());
-    return TC->typeCheckCompletionSequence(parsedExpr, DC);
-  } else {
-    TypeChecker TC(ctx);
-    return TC.typeCheckCompletionSequence(parsedExpr, DC);
-  }
-=======
   TypeChecker &TC = createTypeChecker(ctx);
   return TC.typeCheckCompletionSequence(parsedExpr, DC);
->>>>>>> upstream/master
 }
 
 bool swift::typeCheckExpression(DeclContext *DC, Expr *&parsedExpr) {
   auto &ctx = DC->getASTContext();
   DiagnosticSuppression suppression(ctx.Diags);
-<<<<<<< HEAD
-  if (ctx.getLazyResolver()) {
-    TypeChecker *TC = static_cast<TypeChecker *>(ctx.getLazyResolver());
-    auto resultTy = TC->typeCheckExpression(parsedExpr, DC, TypeLoc(),
-                                      ContextualTypePurpose::CTP_Unused,
-                                      TypeCheckExprFlags::SuppressDiagnostics);
-    return !resultTy;
-  } else {
-    TypeChecker TC(ctx);
-    auto resultTy = TC.typeCheckExpression(parsedExpr, DC, TypeLoc(),
-                                      ContextualTypePurpose::CTP_Unused,
-                                      TypeCheckExprFlags::SuppressDiagnostics);
-    return !resultTy;
-  }
-=======
   TypeChecker &TC = createTypeChecker(ctx);
 
   auto resultTy = TC.typeCheckExpression(parsedExpr, DC, TypeLoc(),
                                     ContextualTypePurpose::CTP_Unused,
                                     TypeCheckExprFlags::SuppressDiagnostics);
   return !resultTy;
->>>>>>> upstream/master
 }
 
 bool swift::typeCheckAbstractFunctionBodyUntil(AbstractFunctionDecl *AFD,
@@ -895,37 +844,20 @@ bool swift::typeCheckAbstractFunctionBodyUntil(AbstractFunctionDecl *AFD,
   auto &Ctx = AFD->getASTContext();
   DiagnosticSuppression suppression(Ctx.Diags);
 
-<<<<<<< HEAD
-  TypeChecker TC(Ctx);
-=======
   TypeChecker &TC = createTypeChecker(Ctx);
->>>>>>> upstream/master
   return !TC.typeCheckAbstractFunctionBodyUntil(AFD, EndTypeCheckLoc);
 }
 
 bool swift::typeCheckTopLevelCodeDecl(TopLevelCodeDecl *TLCD) {
   auto &Ctx = static_cast<Decl *>(TLCD)->getASTContext();
   DiagnosticSuppression suppression(Ctx.Diags);
-<<<<<<< HEAD
-  TypeChecker TC(Ctx);
-=======
   TypeChecker &TC = createTypeChecker(Ctx);
->>>>>>> upstream/master
   TC.typeCheckTopLevelCodeDecl(TLCD);
   return true;
 }
 
-<<<<<<< HEAD
-static void deleteTypeChecker(LazyResolver *resolver) {
-  delete resolver;
-}
-
-OwnedResolver swift::createLazyResolver(ASTContext &Ctx) {
-  return OwnedResolver(new TypeChecker(Ctx), &deleteTypeChecker);
-=======
 TypeChecker &swift::createTypeChecker(ASTContext &Ctx) {
   return TypeChecker::createForContext(Ctx);
->>>>>>> upstream/master
 }
 
 // checkForForbiddenPrefix is for testing purposes.
