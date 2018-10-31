@@ -600,24 +600,9 @@ class ConformanceFlags {
 public:
   typedef uint32_t int_type;
 
-  enum class ConformanceKind {
-    /// A direct reference to a protocol witness table.
-    WitnessTable,
-    /// A function pointer that can be called to access the protocol witness
-    /// table.
-    WitnessTableAccessor,
-    /// A function pointer that can be called to access the protocol witness
-    /// table whose conformance is conditional on additional requirements that
-    /// must first be evaluated and then provided to the accessor function.
-    ConditionalWitnessTableAccessor,
-
-    First_Kind = WitnessTable,
-    Last_Kind = ConditionalWitnessTableAccessor,
-  };
-
 private:
   enum : int_type {
-    ConformanceKindMask = 0x07,      // 8 conformance kinds
+    UnusedLowBits = 0x07,      // historical conformance kind
 
     TypeMetadataKindMask = 0x7 << 3, // 8 type reference kinds
     TypeMetadataKindShift = 3,
@@ -627,16 +612,15 @@ private:
 
     NumConditionalRequirementsMask = 0xFF << 8,
     NumConditionalRequirementsShift = 8,
+
+    HasResilientWitnessesMask = 0x01 << 16,
+    HasGenericWitnessTableMask = 0x01 << 17,
   };
 
   int_type Value;
 
 public:
   ConformanceFlags(int_type value = 0) : Value(value) {}
-
-  ConformanceFlags withConformanceKind(ConformanceKind kind) const {
-    return ConformanceFlags((Value & ~ConformanceKindMask) | int_type(kind));
-  }
 
   ConformanceFlags withTypeReferenceKind(TypeReferenceKind kind) const {
     return ConformanceFlags((Value & ~TypeMetadataKindMask)
@@ -660,9 +644,18 @@ public:
                             | (n << NumConditionalRequirementsShift));
   }
 
-  /// Retrieve the conformance kind.
-  ConformanceKind getConformanceKind() const {
-    return ConformanceKind(Value & ConformanceKindMask);
+  ConformanceFlags withHasResilientWitnesses(bool hasResilientWitnesses) const {
+    return ConformanceFlags((Value & ~HasResilientWitnessesMask)
+                            | (hasResilientWitnesses? HasResilientWitnessesMask
+                                                    : 0));
+  }
+
+  ConformanceFlags withHasGenericWitnessTable(
+                                           bool hasGenericWitnessTable) const {
+    return ConformanceFlags((Value & ~HasGenericWitnessTableMask)
+                            | (hasGenericWitnessTable
+                                 ? HasGenericWitnessTableMask
+                                 : 0));
   }
 
   /// Retrieve the type reference kind kind.
@@ -694,6 +687,17 @@ public:
   unsigned getNumConditionalRequirements() const {
     return (Value & NumConditionalRequirementsMask)
               >> NumConditionalRequirementsShift;
+  }
+
+  /// Whether this conformance has any resilient witnesses.
+  bool hasResilientWitnesses() const {
+    return Value & HasResilientWitnessesMask;
+  }
+
+  /// Whether this conformance has a generic witness table that may need to
+  /// be instantiated.
+  bool hasGenericWitnessTable() const {
+    return Value & HasGenericWitnessTableMask;
   }
 
   int_type getIntValue() const { return Value; }
@@ -852,7 +856,11 @@ using FunctionTypeFlags = TargetFunctionTypeFlags<size_t>;
 
 template <typename int_type>
 class TargetParameterTypeFlags {
-  enum : int_type { ValueOwnershipMask = 0x7F, VariadicMask = 0x80 };
+  enum : int_type {
+    ValueOwnershipMask = 0x7F,
+    VariadicMask       = 0x80,
+    AutoClosureMask    = 0x100,
+  };
   int_type Data;
 
   constexpr TargetParameterTypeFlags(int_type Data) : Data(Data) {}
@@ -872,8 +880,15 @@ public:
                                               (isVariadic ? VariadicMask : 0));
   }
 
+  constexpr TargetParameterTypeFlags<int_type>
+  withAutoClosure(bool isAutoClosure) const {
+    return TargetParameterTypeFlags<int_type>(
+        (Data & ~AutoClosureMask) | (isAutoClosure ? AutoClosureMask : 0));
+  }
+
   bool isNone() const { return Data == 0; }
   bool isVariadic() const { return Data & VariadicMask; }
+  bool isAutoClosure() const { return Data & AutoClosureMask; }
 
   ValueOwnership getValueOwnership() const {
     return (ValueOwnership)(Data & ValueOwnershipMask);
@@ -997,8 +1012,6 @@ enum class ExclusivityFlags : uintptr_t {
   // Read or Modify).
   ActionMask       = 0x1,
 
-  // Downgrade exclusivity failures to a warning.
-  WarningOnly      = 0x10,
   // The runtime should track this access to check against subsequent accesses.
   Tracking         = 0x20
 };
@@ -1013,9 +1026,6 @@ static inline ExclusivityFlags &operator|=(ExclusivityFlags &lhs,
 static inline ExclusivityFlags getAccessAction(ExclusivityFlags flags) {
   return ExclusivityFlags(uintptr_t(flags)
                         & uintptr_t(ExclusivityFlags::ActionMask));
-}
-static inline bool isWarningOnly(ExclusivityFlags flags) {
-  return uintptr_t(flags) & uintptr_t(ExclusivityFlags::WarningOnly);
 }
 static inline bool isTracking(ExclusivityFlags flags) {
   return uintptr_t(flags) & uintptr_t(ExclusivityFlags::Tracking);

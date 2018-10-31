@@ -23,7 +23,7 @@
 
 // Associated type default + flags
 // CHECK-DEFINITION-SAME: [[INT]] add
-// CHECK-DEFINITION-SAME: @"default assoc type \01____y2T118resilient_protocol29ProtocolWithAssocTypeDefaultsPQzG 18resilient_protocol7WrapperV"
+// CHECK-DEFINITION-SAME: @"default assoc type _____y2T1_____QzG 18resilient_protocol7WrapperV AA29ProtocolWithAssocTypeDefaultsP"
 // CHECK-DEFINITION-SAME: [[INT]] 1
 
 // Protocol requirements base descriptor
@@ -42,7 +42,7 @@ import resilient_protocol
 // ----------------------------------------------------------------------------
 // Resilient witness tables
 // ----------------------------------------------------------------------------
-// CHECK-USAGE-LABEL: $s31protocol_resilience_descriptors34ConformsToProtocolWithRequirementsVyxG010resilient_A00fgH0AAWr" = internal
+// CHECK-USAGE-LABEL: $s31protocol_resilience_descriptors34ConformsToProtocolWithRequirementsVyxG010resilient_A00fgH0AAMc" =
 // CHECK-USAGE-SAME: {{got.|__imp_}}$s1T18resilient_protocol24ProtocolWithRequirementsPTl
 // CHECK-USAGE-SAME: @"symbolic x"
 public struct ConformsToProtocolWithRequirements<Element>
@@ -56,7 +56,13 @@ public protocol P { }
 public struct ConditionallyConforms<Element> { }
 public struct Y { }
 
-// CHECK-USAGE: @"$s31protocol_resilience_descriptors29ConformsWithAssocRequirementsV010resilient_A008ProtocoleF12TypeDefaultsAAWr" = internal
+// CHECK-USAGE-LABEL: @"$s31protocol_resilience_descriptors1YV010resilient_A022OtherResilientProtocolAAMc" =
+// CHECK-USAGE-SAME: i32 131072,
+// CHECK-USAGE-SAME: i16 1,
+// CHECK-USAGE-SAME: i16 0
+extension Y: OtherResilientProtocol { }
+
+// CHECK-USAGE: @"$s31protocol_resilience_descriptors29ConformsWithAssocRequirementsV010resilient_A008ProtocoleF12TypeDefaultsAAMc" =
 // CHECK-USAGE-SAME: $s18resilient_protocol29ProtocolWithAssocTypeDefaultsP2T2AC_AA014OtherResilientC0Tn
 // CHECK-USAGE-SAME: $s31protocol_resilience_descriptors29ConformsWithAssocRequirementsV010resilient_A008ProtocoleF12TypeDefaultsAA2T2AdEP_AD014OtherResilientI0PWT
 public struct ConformsWithAssocRequirements : ProtocolWithAssocTypeDefaults {

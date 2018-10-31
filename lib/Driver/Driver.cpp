@@ -920,7 +920,9 @@ Driver::buildCompilation(const ToolChain &TC,
         ArgList->hasArg(options::OPT_driver_time_compilation);
     std::unique_ptr<UnifiedStatsReporter> StatsReporter =
         createStatsReporter(ArgList.get(), Inputs, OI, DefaultTargetTriple);
-    
+    const bool EnableExperimentalDependencies =
+        ArgList->hasArg(options::OPT_enable_experimental_dependencies);
+
     C = llvm::make_unique<Compilation>(
         Diags, TC, OI, Level,
         std::move(ArgList),
@@ -939,7 +941,8 @@ Driver::buildCompilation(const ToolChain &TC,
         DriverBatchSizeLimit,
         SaveTemps,
         ShowDriverTimeCompilation,
-        std::move(StatsReporter));
+        std::move(StatsReporter),
+        EnableExperimentalDependencies);
   }
 
   // Construct the graph of Actions.
@@ -1779,7 +1782,8 @@ void Driver::buildActions(SmallVectorImpl<const Action *> &TopLevelActions,
       case file_types::TY_TBD:
       case file_types::TY_ModuleTrace:
       case file_types::TY_OptRecord:
-      case file_types::TY_SwiftModuleInterfaceFile:
+      case file_types::TY_SwiftParseableInterfaceFile:
+      case file_types::TY_SwiftParseableInterfaceDeps:
         // We could in theory handle assembly or LLVM input, but let's not.
         // FIXME: What about LTO?
         Diags.diagnose(SourceLoc(), diag::error_unexpected_input_file,
@@ -2799,9 +2803,9 @@ void Driver::chooseParseableInterfacePath(Compilation &C, const JobAction *JA,
   StringRef outputPath = *getOutputFilenameFromPathArgOrAsTopLevel(
       C.getOutputInfo(), C.getArgs(),
       options::OPT_emit_parseable_module_interface_path,
-      file_types::TY_SwiftModuleInterfaceFile,
+      file_types::TY_SwiftParseableInterfaceFile,
       /*TreatAsTopLevelOutput*/true, workingDirectory, buffer);
-  output->setAdditionalOutputForType(file_types::TY_SwiftModuleInterfaceFile,
+  output->setAdditionalOutputForType(file_types::TY_SwiftParseableInterfaceFile,
                                      outputPath);
 }
 

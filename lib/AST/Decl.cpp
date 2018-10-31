@@ -621,7 +621,7 @@ GenericParamList::clone(DeclContext *dc) const {
       auto second = reqt.getConstraintLoc();
       reqt = RequirementRepr::getTypeConstraint(
           first.clone(ctx),
-          reqt.getColonLoc(),
+          reqt.getSeparatorLoc(),
           second.clone(ctx));
       break;
     }
@@ -630,7 +630,7 @@ GenericParamList::clone(DeclContext *dc) const {
       auto second = reqt.getSecondTypeLoc();
       reqt = RequirementRepr::getSameType(
           first.clone(ctx),
-          reqt.getEqualLoc(),
+          reqt.getSeparatorLoc(),
           second.clone(ctx));
       break;
     }
@@ -639,7 +639,7 @@ GenericParamList::clone(DeclContext *dc) const {
       auto layout = reqt.getLayoutConstraintLoc();
       reqt = RequirementRepr::getLayoutConstraint(
           first.clone(ctx),
-          reqt.getColonLoc(),
+          reqt.getSeparatorLoc(),
           layout);
       break;
     }
@@ -731,6 +731,7 @@ GenericSignature *GenericContext::getGenericSignature() const {
   // The signature of a Protocol is trivial (Self: TheProtocol) so let's compute
   // it.
   if (auto PD = dyn_cast<ProtocolDecl>(this)) {
+    const_cast<ProtocolDecl *>(PD)->createGenericParamsIfMissing();
     auto self = PD->getSelfInterfaceType()->castTo<GenericTypeParamType>();
     auto req =
         Requirement(RequirementKind::Conformance, self, PD->getDeclaredType());
@@ -3642,7 +3643,7 @@ ProtocolDecl::getInheritedProtocols() const {
   SmallPtrSet<const ProtocolDecl *, 4> known;
   known.insert(this);
   bool anyObject = false;
-  for (const auto &found :
+  for (const auto found :
            getDirectlyInheritedNominalTypeDecls(
              const_cast<ProtocolDecl *>(this), anyObject)) {
     if (auto proto = dyn_cast<ProtocolDecl>(found.second)) {
@@ -3758,12 +3759,14 @@ bool ProtocolDecl::requiresClassSlow() {
     getDirectlyInheritedNominalTypeDecls(this, anyObject);
 
   // Quick check: do we inherit AnyObject?
-  if (anyObject)
-    return Bits.ProtocolDecl.RequiresClass = true;
+  if (anyObject) {
+    Bits.ProtocolDecl.RequiresClass = true;
+    return true;
+  }
 
   // Look through all of the inherited nominals for a superclass or a
   // class-bound protocol.
-  for (const auto &found : allInheritedNominals) {
+  for (const auto found : allInheritedNominals) {
     // Superclass bound.
     if (isa<ClassDecl>(found.second))
       return Bits.ProtocolDecl.RequiresClass = true;
@@ -3882,13 +3885,13 @@ findProtocolSelfReferences(const ProtocolDecl *proto, Type type,
   }
 
   // A direct reference to 'Self' is covariant.
-  if (proto->getProtocolSelfType()->isEqual(type))
+  if (proto->getSelfInterfaceType()->isEqual(type))
     return SelfReferenceKind::Result();
 
   // Special handling for associated types.
   if (!skipAssocTypes && type->is<DependentMemberType>()) {
     type = type->getRootGenericParam();
-    if (proto->getProtocolSelfType()->isEqual(type))
+    if (proto->getSelfInterfaceType()->isEqual(type))
       return SelfReferenceKind::Other();
   }
 
@@ -4769,8 +4772,12 @@ Type DeclContext::getSelfTypeInContext() const {
   assert(isTypeContext());
 
   // For a protocol or extension thereof, the type is 'Self'.
-  if (getSelfProtocolDecl())
-    return mapTypeIntoContext(getProtocolSelfType());
+  if (getSelfProtocolDecl()) {
+    auto selfType = getProtocolSelfType();
+    if (!selfType)
+      return ErrorType::get(getASTContext());
+    return mapTypeIntoContext(selfType);
+  }
   return getDeclaredTypeInContext();
 }
 
@@ -4779,8 +4786,12 @@ Type DeclContext::getSelfInterfaceType() const {
   assert(isTypeContext());
 
   // For a protocol or extension thereof, the type is 'Self'.
-  if (getSelfProtocolDecl())
-    return getProtocolSelfType();
+  if (getSelfProtocolDecl()) {
+    auto selfType = getProtocolSelfType();
+    if (!selfType)
+      return ErrorType::get(getASTContext());
+    return selfType;
+  }
   return getDeclaredInterfaceType();
 }
 

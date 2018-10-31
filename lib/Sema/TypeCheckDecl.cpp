@@ -2049,25 +2049,42 @@ PrecedenceGroupDecl *TypeChecker::lookupPrecedenceGroup(DeclContext *dc,
   return group;
 }
 
-static void checkDesignatedTypes(OperatorDecl *OD, Identifier name,
-                                 SourceLoc loc, TypeChecker &tc,
-                                 ASTContext &ctx) {
-  auto *dc = OD->getDeclContext();
-  auto *TyR = new (ctx) SimpleIdentTypeRepr(loc, name);
+static NominalTypeDecl *resolveSingleNominalTypeDecl(
+    DeclContext *DC, SourceLoc loc, Identifier ident, TypeChecker &tc,
+    TypeResolutionFlags flags = TypeResolutionFlags(0)) {
+  auto *TyR = new (tc.Context) SimpleIdentTypeRepr(loc, ident);
   TypeLoc typeLoc = TypeLoc(TyR);
 
   TypeResolutionOptions options = TypeResolverContext::TypeAliasDecl;
-  if (tc.validateType(typeLoc, TypeResolution::forContextual(dc), options)) {
-    typeLoc.setInvalidType(ctx);
+  options |= flags;
+  if (tc.validateType(typeLoc, TypeResolution::forInterface(DC), options))
+    return nullptr;
+
+  return typeLoc.getType()->getAnyNominal();
+}
+
+static bool checkDesignatedTypes(OperatorDecl *OD,
+                                 ArrayRef<Identifier> identifiers,
+                                 ArrayRef<SourceLoc> identifierLocs,
+                                 TypeChecker &TC) {
+  assert(identifiers.size() == identifierLocs.size());
+
+  SmallVector<NominalTypeDecl *, 1> designatedNominalTypes;
+  auto *DC = OD->getDeclContext();
+
+  for (auto index : indices(identifiers)) {
+    auto *decl = resolveSingleNominalTypeDecl(DC, identifierLocs[index],
+                                              identifiers[index], TC);
+
+    if (!decl)
+      return true;
+
+    designatedNominalTypes.push_back(decl);
   }
 
-  if (!typeLoc.isError()) {
-    auto *decl = typeLoc.getType()->getAnyNominal();
-    assert(decl);
-    OD->setDesignatedNominalType(decl);
-    // FIXME: verify this operator has a declaration within this
-    //        protocol with the same arity and fixity
-  }
+  auto &ctx = TC.Context;
+  OD->setDesignatedNominalTypes(ctx.AllocateCopy(designatedNominalTypes));
+  return false;
 }
 
 /// Validate the given operator declaration.
@@ -2086,11 +2103,12 @@ void TypeChecker::validateDecl(OperatorDecl *OD) {
 
   // Pre- or post-fix operator?
   if (!IOD) {
-    auto *nominal = OD->getDesignatedNominalType();
-    auto nominalId = OD->getDesignatedNominalTypeName();
-    if (!nominal && !nominalId.empty() && enableOperatorDesignatedTypes) {
-      auto nominalIdLoc = OD->getDesignatedNominalTypeNameLoc();
-      checkDesignatedTypes(OD, nominalId, nominalIdLoc, *this, Context);
+    auto nominalTypes = OD->getDesignatedNominalTypes();
+    if (nominalTypes.empty() && enableOperatorDesignatedTypes) {
+      auto identifiers = OD->getIdentifiers();
+      auto identifierLocs = OD->getIdentifierLocs();
+      if (checkDesignatedTypes(OD, identifiers, identifierLocs, *this))
+        OD->setInvalid();
     }
     return;
   }
@@ -2098,45 +2116,60 @@ void TypeChecker::validateDecl(OperatorDecl *OD) {
   if (!IOD->getPrecedenceGroup()) {
     PrecedenceGroupDecl *group = nullptr;
 
-    auto firstId = IOD->getFirstIdentifier();
-    auto firstIdLoc = IOD->getFirstIdentifierLoc();
+    auto identifiers = IOD->getIdentifiers();
+    auto identifierLocs = IOD->getIdentifierLocs();
 
-    // If a name was given, try to look it up.
-    if (!firstId.empty()) {
-      group = lookupPrecedenceGroupPrimitive(IOD->getDeclContext(), firstId,
-                                             firstIdLoc);
-    }
-
-    auto secondId = IOD->getSecondIdentifier();
-    auto *nominal = IOD->getDesignatedNominalType();
-    if (!nominal && enableOperatorDesignatedTypes) {
-      auto secondIdLoc = IOD->getSecondIdentifierLoc();
-      assert(secondId.empty() || !firstId.empty());
-
-      auto nominalId = group ? secondId : firstId;
-      auto nominalIdLoc = group ? secondIdLoc : firstIdLoc;
-      if (!nominalId.empty())
-        checkDesignatedTypes(IOD, nominalId, nominalIdLoc, *this, Context);
-    }
-
-    if (!group && !IOD->isInvalid()) {
-      if (!firstId.empty() &&
-          (!secondId.empty() || !IOD->getDesignatedNominalType())) {
-        diagnose(firstIdLoc, diag::unknown_precedence_group, firstId);
-        IOD->setInvalid();
+    if (!identifiers.empty()) {
+      group = lookupPrecedenceGroupPrimitive(IOD->getDeclContext(),
+                                             identifiers[0], identifierLocs[0]);
+      if (group) {
+        identifiers = identifiers.slice(1);
+        identifierLocs = identifierLocs.slice(1);
+      } else {
+        // If we're either not allowing types, or we are allowing them
+        // and this identifier is not a type, emit an error as if it's
+        // a precedence group.
+        auto *DC = OD->getDeclContext();
+        if (!(enableOperatorDesignatedTypes &&
+              resolveSingleNominalTypeDecl(
+                  DC, identifierLocs[0], identifiers[0], *this,
+                  TypeResolutionFlags::SilenceErrors))) {
+          diagnose(identifierLocs[0], diag::unknown_precedence_group,
+                   identifiers[0]);
+          identifiers = identifiers.slice(1);
+          identifierLocs = identifierLocs.slice(1);
+        }
       }
+    }
 
+    if (!identifiers.empty() && !enableOperatorDesignatedTypes) {
+      assert(!group);
+      diagnose(identifierLocs[0], diag::unknown_precedence_group,
+               identifiers[0]);
+      identifiers = identifiers.slice(1);
+      identifierLocs = identifierLocs.slice(1);
+      assert(identifiers.empty() && identifierLocs.empty());
+    }
+
+    if (!group) {
       group = lookupPrecedenceGroupPrimitive(
           IOD->getDeclContext(), Context.Id_DefaultPrecedence, SourceLoc());
-      if (!group && firstId.empty() && !IOD->isInvalid()) {
-        diagnose(IOD->getLoc(), diag::missing_builtin_precedence_group,
-                 Context.Id_DefaultPrecedence);
-      }
     }
 
     if (group) {
       validateDecl(group);
       IOD->setPrecedenceGroup(group);
+    } else {
+      diagnose(IOD->getLoc(), diag::missing_builtin_precedence_group,
+               Context.Id_DefaultPrecedence);
+    }
+
+    auto nominalTypes = IOD->getDesignatedNominalTypes();
+    if (nominalTypes.empty() && enableOperatorDesignatedTypes) {
+      if (checkDesignatedTypes(IOD, identifiers, identifierLocs, *this)) {
+        IOD->setInvalid();
+        return;
+      }
     }
   }
 }
@@ -2275,7 +2308,7 @@ static void checkProtocolSelfRequirements(ProtocolDecl *proto,
         case RequirementKind::Layout:
         case RequirementKind::Superclass:
           if (reqRepr &&
-              req.getFirstType()->isEqual(proto->getProtocolSelfType())) {
+              req.getFirstType()->isEqual(proto->getSelfInterfaceType())) {
             auto &diags = proto->getASTContext().Diags;
             diags.diagnose(reqRepr->getSubjectLoc().getLoc(),
                            diag::protocol_where_clause_self_requirement);
@@ -2426,6 +2459,25 @@ public:
             unimplementedStatic(Classes);
         }
       }
+    }
+
+    // Reject variable if it is a stored property with an uninhabited type
+    if (VD->hasStorage() && 
+        VD->getInterfaceType()->isStructurallyUninhabited()) {
+      auto uninhabitedTypeDiag = diag::pattern_no_uninhabited_type;
+      
+      if (VD->getInterfaceType()->is<TupleType>()) {
+        uninhabitedTypeDiag = diag::pattern_no_uninhabited_tuple_type;
+      } else {
+        assert((VD->getInterfaceType()->is<EnumType>() || 
+                VD->getInterfaceType()->is<BoundGenericEnumType>()) && 
+          "unknown structurally uninhabited type");
+      }
+          
+      TC.diagnose(VD->getLoc(), uninhabitedTypeDiag, VD->isLet(),
+                  VD->isInstanceMember(), VD->getName(),
+                  VD->getInterfaceType());
+      VD->markInvalid();
     }
 
     if (!checkOverrides(VD)) {
@@ -3044,7 +3096,6 @@ public:
     checkAccessControl(TC, PD);
 
     checkInheritanceClause(PD);
-    checkProtocolSelfRequirements(PD, PD);
 
     TC.checkDeclCircularity(PD);
     if (PD->isResilient())
@@ -3174,19 +3225,6 @@ public:
 
     TC.checkDeclAttributesEarly(ED);
 
-    if (auto extendedTy = ED->getExtendedType()) {
-      if (!extendedTy->is<NominalType>() &&
-          !extendedTy->is<BoundGenericType>() &&
-          !extendedTy->hasError()) {
-        // FIXME: Redundant diagnostic test here?
-        TC.diagnose(ED->getStartLoc(), diag::non_nominal_extension,
-                    extendedTy);
-        // FIXME: It would be nice to point out where we found the named type
-        // declaration, if any.
-        ED->setInvalid();
-      }
-    }
-
     checkInheritanceClause(ED);
 
     if (auto nominal = ED->getExtendedNominal()) {
@@ -3222,8 +3260,8 @@ public:
     // nominal type.
     // FIXME: This is a hack to make sure that the type checker precomputes
     // enough information for later passes that might query conformances.
-    if (auto nominal = ED->getSelfNominalTypeDecl())
-      (void)nominal->getAllConformances();
+    if (auto nominal = ED->getExtendedNominal())
+      (void) nominal->getAllConformances();
   }
 
   void visitTopLevelCodeDecl(TopLevelCodeDecl *TLCD) {
@@ -3437,7 +3475,7 @@ static void validateTypealiasType(TypeChecker &tc, TypeAliasDecl *typeAlias) {
   }
 
   if (tc.validateType(typeAlias->getUnderlyingTypeLoc(),
-                      TypeResolution::forContextual(typeAlias), options)) {
+                      TypeResolution::forInterface(typeAlias), options)) {
     typeAlias->setInvalid();
     typeAlias->getUnderlyingTypeLoc().setInvalidType(tc.Context);
   }
@@ -4936,6 +4974,13 @@ void TypeChecker::validateExtension(ExtensionDecl *ext) {
   // Extensions nested inside other declarations are invalid and we
   // do not bind them.
   if (!isa<SourceFile>(dc))
+    return;
+
+  // If this is not bound to any decls at this point, this extension is in
+  // inactive coditional compilation block. It's not safe to typecheck this
+  // extension. This happens if code completion is triggered in inactive
+  // conditional complation block.
+  if (!ext->alreadyBoundToNominal())
     return;
 
   // Validate the nominal type declaration being extended.

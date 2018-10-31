@@ -2462,19 +2462,13 @@ void Parser::consumeDecl(ParserPosition BeginParserPosition,
                          ParseDeclOptions Flags,
                          bool IsTopLevel) {
   SourceLoc CurrentLoc = Tok.getLoc();
+
+  SourceLoc EndLoc = PreviousLoc;
   backtrackToPosition(BeginParserPosition);
   SourceLoc BeginLoc = Tok.getLoc();
-  // Consume tokens up to code completion token.
-  while (Tok.isNot(tok::code_complete, tok::eof))
-    consumeToken();
 
-  // Consume the code completion token, if there is one.
-  consumeIf(tok::code_complete);
-  SourceLoc EndLoc = DelayedDeclEnd.isValid() &&
-                     SourceMgr.isBeforeInBuffer(Tok.getLoc(), DelayedDeclEnd) ?
-                       DelayedDeclEnd : Tok.getLoc();
   State->delayDecl(PersistentParserState::DelayedDeclKind::Decl, Flags.toRaw(),
-                   CurDeclContext, { BeginLoc, EndLoc },
+                   CurDeclContext, {BeginLoc, EndLoc},
                    BeginParserPosition.PreviousLoc);
 
   while (SourceMgr.isBeforeInBuffer(Tok.getLoc(), CurrentLoc))
@@ -4218,10 +4212,12 @@ struct Parser::ParsedAccessors {
   }
 };
 
-static bool parseAccessorIntroducer(Parser &P, DeclAttributes &Attributes,
+static bool parseAccessorIntroducer(Parser &P,
+                                    DeclAttributes &Attributes,
                                     AccessorKind &Kind,
                                     AddressorKind &addressorKind,
                                     SourceLoc &Loc) {
+  assert(Attributes.isEmpty());
   bool FoundCCToken;
   P.parseDeclAttributeList(Attributes, FoundCCToken);
 
@@ -4264,12 +4260,12 @@ static bool parseAccessorIntroducer(Parser &P, DeclAttributes &Attributes,
   return false;
 }
 
-bool Parser::parseGetSet(ParseDeclOptions Flags,
-                         GenericParamList *GenericParams,
-                         ParameterList *Indices,
-                         TypeLoc ElementTy, ParsedAccessors &accessors,
-                         AbstractStorageDecl *storage,
-                         SourceLoc StaticLoc) {
+ParserStatus Parser::parseGetSet(ParseDeclOptions Flags,
+                                 GenericParamList *GenericParams,
+                                 ParameterList *Indices,
+                                 TypeLoc ElementTy, ParsedAccessors &accessors,
+                                 AbstractStorageDecl *storage,
+                                 SourceLoc StaticLoc) {
   assert(Tok.is(tok::l_brace));
 
   // Properties in protocols use a very limited syntax.
@@ -4294,14 +4290,14 @@ bool Parser::parseGetSet(ParseDeclOptions Flags,
 
     // In the limited syntax, fall out and let the caller handle it.
     if (parsingLimitedSyntax)
-      return false;
+      return makeParserSuccess();
 
     diagnose(accessors.RBLoc, diag::computed_property_no_accessors,
              /*subscript*/ Indices != nullptr);
-    return true;
+    return makeParserError();
   }
 
-  auto parseImplicitGetter = [&]() -> bool {
+  auto parseImplicitGetter = [&]() {
     assert(Tok.is(tok::l_brace));
     accessors.LBLoc = Tok.getLoc();
     auto getter =
@@ -4312,7 +4308,6 @@ bool Parser::parseGetSet(ParseDeclOptions Flags,
     accessors.add(getter);
     parseAbstractFunctionBody(getter);
     accessors.RBLoc = getter->getEndLoc();
-    return false;
   };
 
   // Prepare backtracking for implicit getter.
@@ -4320,6 +4315,7 @@ bool Parser::parseGetSet(ParseDeclOptions Flags,
   backtrack.emplace(*this);
 
   bool Invalid = false;
+  bool accessorHasCodeCompletion = false;
   bool IsFirstAccessor = true;
   accessors.LBLoc = consumeToken(tok::l_brace);
   while (!Tok.isAny(tok::r_brace, tok::eof)) {
@@ -4336,6 +4332,29 @@ bool Parser::parseGetSet(ParseDeclOptions Flags,
     if (NotAccessor) {
       AccessorCtx->setTransparent();
       AccessorCtx.reset();
+
+      if (Tok.is(tok::code_complete)) {
+        if (CodeCompletion) {
+          if (IsFirstAccessor && !parsingLimitedSyntax) {
+            // If CC token is the first token after '{', it might be implicit
+            // getter. Set up dummy accessor as the decl context to populate
+            // 'self' decl.
+            auto getter = createAccessorFunc(
+                accessors.LBLoc, /*ValueNamePattern*/ nullptr, GenericParams,
+                Indices, ElementTy, StaticLoc, Flags, AccessorKind::Get,
+                AddressorKind::NotAddressor, storage, this,
+                /*AccessorKeywordLoc*/ SourceLoc());
+            accessors.add(getter);
+            CodeCompletion->setParsedDecl(getter);
+          } else {
+            CodeCompletion->setParsedDecl(storage);
+          }
+          CodeCompletion->completeAccessorBeginning();
+        }
+        consumeToken(tok::code_complete);
+        accessorHasCodeCompletion = true;
+        break;
+      }
 
       // parsingLimitedSyntax mode cannot have a body.
       if (parsingLimitedSyntax) {
@@ -4356,7 +4375,8 @@ bool Parser::parseGetSet(ParseDeclOptions Flags,
       // position.
       backtrack.reset();
       AccessorListCtx.setTransparent();
-      return parseImplicitGetter();
+      parseImplicitGetter();
+      return makeParserSuccess();
     }
     IsFirstAccessor = false;
 
@@ -4421,7 +4441,9 @@ bool Parser::parseGetSet(ParseDeclOptions Flags,
 
   parseMatchingToken(tok::r_brace, accessors.RBLoc,
                      diag::expected_rbrace_in_getset, accessors.LBLoc);
-  return Invalid;
+  if (accessorHasCodeCompletion)
+    return makeParserCodeCompletionStatus();
+  return Invalid ? makeParserError() : makeParserSuccess();
 }
 
 static void fillInAccessorTypeErrors(Parser &P, FuncDecl *accessor,
@@ -4467,12 +4489,12 @@ static void fillInAccessorTypeErrors(Parser &P,
 }
 
 /// \brief Parse the brace-enclosed getter and setter for a variable.
-VarDecl *Parser::parseDeclVarGetSet(Pattern *pattern,
-                                    ParseDeclOptions Flags,
-                                    SourceLoc StaticLoc, SourceLoc VarLoc,
-                                    bool hasInitializer,
-                                    const DeclAttributes &Attributes,
-                                    SmallVectorImpl<Decl *> &Decls) {
+ParserResult<VarDecl>
+Parser::parseDeclVarGetSet(Pattern *pattern, ParseDeclOptions Flags,
+                           SourceLoc StaticLoc, SourceLoc VarLoc,
+                           bool hasInitializer,
+                           const DeclAttributes &Attributes,
+                           SmallVectorImpl<Decl *> &Decls) {
   bool Invalid = false;
   
   // The grammar syntactically requires a simple identifier for the variable
@@ -4545,8 +4567,12 @@ VarDecl *Parser::parseDeclVarGetSet(Pattern *pattern,
 
   // Parse getter and setter.
   ParsedAccessors accessors;
-  if (parseGetSet(Flags, /*GenericParams=*/nullptr,
-                  /*Indices=*/nullptr, TyLoc, accessors, storage, StaticLoc))
+  auto AccessorStatus = parseGetSet(Flags, /*GenericParams=*/nullptr,
+                                    /*Indices=*/nullptr, TyLoc, accessors,
+                                    storage, StaticLoc);
+  if (AccessorStatus.hasCodeCompletion())
+    return makeParserCodeCompletionStatus();
+  if (AccessorStatus.isError())
     Invalid = true;
 
   // If we have an invalid case, bail out now.
@@ -4594,7 +4620,7 @@ VarDecl *Parser::parseDeclVarGetSet(Pattern *pattern,
   accessors.record(*this, PrimaryVar, Invalid, Flags, StaticLoc,
                    Attributes, TyLoc, /*indices*/ nullptr, Decls);
 
-  return PrimaryVar;
+  return makeParserResult(PrimaryVar);
 }
 
 /// Add the given accessor to the collection of parsed accessors.  If
@@ -5042,14 +5068,12 @@ Parser::parseDeclVar(ParseDeclOptions Flags,
         PBDEntries.back().setInitializerLazy();
       }
 
-      // If we are doing second pass of code completion, we don't want to
-      // suddenly cut off parsing and throw away the declaration.
-      if (init.hasCodeCompletion() && isCodeCompletionFirstPass()) {
-
-        // Register the end of the init as the end of the delayed parsing.
-        DelayedDeclEnd
-          = init.getPtrOrNull() ? init.get()->getEndLoc() : SourceLoc();
-        return makeResult(makeParserCodeCompletionStatus());
+      if (init.hasCodeCompletion()) {
+        Status |= init;
+        // If we are doing second pass of code completion, we don't want to
+        // suddenly cut off parsing and throw away the declaration.
+        if (isCodeCompletionFirstPass())
+          return makeResult(makeParserCodeCompletionStatus());
       }
 
       if (init.isNull())
@@ -5132,16 +5156,16 @@ Parser::parseDeclVar(ParseDeclOptions Flags,
     // var-get-set clause, parse the var-get-set clause.
     } else if (Tok.is(tok::l_brace)) {
       HasAccessors = true;
-      
-      if (auto *boundVar = parseDeclVarGetSet(pattern, Flags,
-                                              StaticLoc, VarLoc,
-                                              PatternInit != nullptr,
-                                              Attributes, Decls)) {
-        if (PatternInit && !boundVar->hasStorage()) {
-          diagnose(pattern->getLoc(), diag::getset_init)
+      auto boundVar = parseDeclVarGetSet(pattern, Flags, StaticLoc, VarLoc,
+                                         PatternInit != nullptr,Attributes,
+                                         Decls);
+      if (boundVar.hasCodeCompletion())
+        return makeResult(makeParserCodeCompletionStatus());
+      if (PatternInit && boundVar.isNonNull() &&
+          !boundVar.get()->hasStorage()) {
+        diagnose(pattern->getLoc(), diag::getset_init)
             .highlight(PatternInit->getSourceRange());
-          PatternInit = nullptr;
-        }
+        PatternInit = nullptr;
       }
     }
     
@@ -6233,10 +6257,9 @@ Parser::parseDeclSubscript(ParseDeclOptions Flags,
       Status.setIsParseError();
     }
   } else {
-    if (parseGetSet(Flags, GenericParams,
-                    Indices.get(), ElementTy.get(),
-                    accessors, Subscript, /*StaticLoc=*/SourceLoc()))
-      Status.setIsParseError();
+    Status |= parseGetSet(Flags, GenericParams,
+                          Indices.get(), ElementTy.get(),
+                          accessors, Subscript, /*StaticLoc=*/SourceLoc());
   }
 
   bool Invalid = false;
@@ -6496,13 +6519,11 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
   // parse them both as identifiers here and sort it out in type
   // checking.
   SourceLoc colonLoc;
-  Identifier firstIdentifierName;
-  SourceLoc firstIdentifierNameLoc;
-  Identifier secondIdentifierName;
-  SourceLoc secondIdentifierNameLoc;
-
+  SmallVector<Identifier, 4> identifiers;
+  SmallVector<SourceLoc, 4> identifierLocs;
   if (Tok.is(tok::colon)) {
-    SyntaxParsingContext GroupCtxt(SyntaxContext, SyntaxKind::InfixOperatorGroup);
+    SyntaxParsingContext GroupCtxt(SyntaxContext,
+                                   SyntaxKind::OperatorPrecedenceAndTypes);
     colonLoc = consumeToken();
     if (Tok.is(tok::code_complete)) {
       if (CodeCompletion && !isPrefix && !isPostfix) {
@@ -6516,30 +6537,38 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
 
     if (Context.LangOpts.EnableOperatorDesignatedTypes) {
       if (Tok.is(tok::identifier)) {
-        firstIdentifierName = Context.getIdentifier(Tok.getText());
-        firstIdentifierNameLoc = consumeToken(tok::identifier);
+        SyntaxParsingContext GroupCtxt(SyntaxContext,
+                                       SyntaxKind::IdentifierList);
 
-        if (consumeIf(tok::comma)) {
-          if (isPrefix || isPostfix)
-            diagnose(colonLoc, diag::precedencegroup_not_infix)
-                .fixItRemove({colonLoc, firstIdentifierNameLoc});
+        identifiers.push_back(Context.getIdentifier(Tok.getText()));
+        identifierLocs.push_back(consumeToken(tok::identifier));
+
+        while (Tok.is(tok::comma)) {
+          auto comma = consumeToken();
 
           if (Tok.is(tok::identifier)) {
-            secondIdentifierName = Context.getIdentifier(Tok.getText());
-            secondIdentifierNameLoc = consumeToken(tok::identifier);
+            identifiers.push_back(Context.getIdentifier(Tok.getText()));
+            identifierLocs.push_back(consumeToken(tok::identifier));
           } else {
-            auto otherTokLoc = consumeToken();
-            diagnose(otherTokLoc, diag::operator_decl_trailing_comma);
+            if (Tok.isNot(tok::eof)) {
+              auto otherTokLoc = consumeToken();
+              diagnose(otherTokLoc, diag::operator_decl_expected_type);
+            } else {
+              diagnose(comma, diag::operator_decl_trailing_comma);
+            }
           }
         }
       }
     } else if (Tok.is(tok::identifier)) {
-      firstIdentifierName = Context.getIdentifier(Tok.getText());
-      firstIdentifierNameLoc = consumeToken(tok::identifier);
+      SyntaxParsingContext GroupCtxt(SyntaxContext,
+                                     SyntaxKind::IdentifierList);
+
+      identifiers.push_back(Context.getIdentifier(Tok.getText()));
+      identifierLocs.push_back(consumeToken(tok::identifier));
 
       if (isPrefix || isPostfix) {
         diagnose(colonLoc, diag::precedencegroup_not_infix)
-            .fixItRemove({colonLoc, firstIdentifierNameLoc});
+            .fixItRemove({colonLoc, identifierLocs.back()});
       }
       // Nothing to complete here, simply consume the token.
       if (Tok.is(tok::code_complete))
@@ -6555,7 +6584,8 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
     } else {
       auto Diag = diagnose(lBraceLoc, diag::deprecated_operator_body);
       if (Tok.is(tok::r_brace)) {
-        SourceLoc lastGoodLoc = firstIdentifierNameLoc;
+        SourceLoc lastGoodLoc =
+            !identifierLocs.empty() ? identifierLocs.back() : SourceLoc();
         if (lastGoodLoc.isInvalid())
           lastGoodLoc = NameLoc;
         SourceLoc lastGoodLocEnd = Lexer::getLocForEndOfToken(SourceMgr,
@@ -6573,16 +6603,18 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
   if (Attributes.hasAttribute<PrefixAttr>())
     res = new (Context)
         PrefixOperatorDecl(CurDeclContext, OperatorLoc, Name, NameLoc,
-                           firstIdentifierName, firstIdentifierNameLoc);
+                           Context.AllocateCopy(identifiers),
+                           Context.AllocateCopy(identifierLocs));
   else if (Attributes.hasAttribute<PostfixAttr>())
     res = new (Context)
         PostfixOperatorDecl(CurDeclContext, OperatorLoc, Name, NameLoc,
-                            firstIdentifierName, firstIdentifierNameLoc);
+                            Context.AllocateCopy(identifiers),
+                            Context.AllocateCopy(identifierLocs));
   else
     res = new (Context)
         InfixOperatorDecl(CurDeclContext, OperatorLoc, Name, NameLoc, colonLoc,
-                          firstIdentifierName, firstIdentifierNameLoc,
-                          secondIdentifierName, secondIdentifierNameLoc);
+                          Context.AllocateCopy(identifiers),
+                          Context.AllocateCopy(identifierLocs));
 
   diagnoseOperatorFixityAttributes(*this, Attributes, res);
 

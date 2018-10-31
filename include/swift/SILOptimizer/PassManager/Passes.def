@@ -54,6 +54,8 @@ PASS(AADumper, "aa-dump",
      "Dump Alias Analysis over all Pairs")
 PASS(ABCOpt, "abcopts",
      "Array Bounds Check Optimization")
+PASS(AccessEnforcementDom, "access-enforcement-dom",
+     "Remove dominated access checks with no nested conflict")
 PASS(AccessEnforcementOpts, "access-enforcement-opts",
      "Access Enforcement Optimization")
 PASS(AccessEnforcementSelection, "access-enforcement-selection",
@@ -154,6 +156,8 @@ PASS(ARCSequenceOpts, "arc-sequence-opts",
      "ARC Sequence Optimization")
 PASS(ARCLoopOpts, "arc-loop-opts",
      "ARC Loop Optimization")
+PASS(EarlyRedundantLoadElimination, "early-redundant-load-elim",
+     "Early Redundant Load Elimination")
 PASS(RedundantLoadElimination, "redundant-load-elim",
      "Redundant Load Elimination")
 PASS(DeadStoreElimination, "dead-store-elim",

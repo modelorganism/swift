@@ -172,10 +172,23 @@ public:
   /// Build instructions before the given insertion point, inheriting the debug
   /// location.
   ///
-  /// Clients should prefer this constructor.
-  SILBuilder(SILInstruction *I, SILBuilderContext &C)
+  /// SILBuilderContext must outlive this SILBuilder instance.
+  SILBuilder(SILInstruction *I, const SILDebugScope *DS, SILBuilderContext &C)
       : TempContext(C.getModule()), C(C), F(I->getFunction()) {
+    assert(DS && "instruction has no debug scope");
+    setCurrentDebugScope(DS);
     setInsertionPoint(I);
+  }
+
+  /// Build instructions before the given insertion point, inheriting the debug
+  /// location.
+  ///
+  /// SILBuilderContext must outlive this SILBuilder instance.
+  SILBuilder(SILBasicBlock *BB, const SILDebugScope *DS, SILBuilderContext &C)
+      : TempContext(C.getModule()), C(C), F(BB->getParent()) {
+    assert(DS && "block has no debug scope");
+    setCurrentDebugScope(DS);
+    setInsertionPoint(BB);
   }
 
   // Allow a pass to override the current SIL module conventions. This should
@@ -361,6 +374,16 @@ public:
   /// instruction) then split the block at that instruction and return the
   /// continuation block.
   SILBasicBlock *splitBlockForFallthrough();
+
+  /// Convenience for creating a fall-through basic block on-the-fly without
+  /// affecting the insertion point.
+  SILBasicBlock *createFallthroughBlock(SILLocation loc,
+                                        SILBasicBlock *targetBB) {
+    auto *newBB = F->createBasicBlock();
+    SILBuilder(newBB, this->getCurrentDebugScope(), this->getBuilderContext())
+        .createBranch(loc, targetBB);
+    return newBB;
+  }
 
   //===--------------------------------------------------------------------===//
   // SILInstruction Creation Methods
@@ -655,6 +678,13 @@ public:
     return insert(new (getModule())
                       BeginBorrowInst(getSILDebugLocation(Loc), LV));
   }
+
+  // Pass in an address or value, perform a begin_borrow/load_borrow and pass
+  // the value to the passed in closure. After the closure has finished
+  // executing, automatically insert the end_borrow. The closure can assume that
+  // it will receive a loaded loadable value.
+  void emitScopedBorrowOperation(SILLocation loc, SILValue original,
+                                 function_ref<void(SILValue)> &&fun);
 
   /// Utility function that returns a trivial store if the stored type is
   /// trivial and a \p Qualifier store if the stored type is non-trivial.
@@ -2123,10 +2153,8 @@ public:
   ///
   /// Clients should prefer this constructor.
   SILBuilderWithScope(SILInstruction *I, SILBuilderContext &C)
-    : SILBuilder(I, C) {
-    assert(I->getDebugScope() && "instruction has no debug scope");
-    setCurrentDebugScope(I->getDebugScope());
-  }
+    : SILBuilder(I, I->getDebugScope(), C)
+  {}
 
   explicit SILBuilderWithScope(
       SILInstruction *I,

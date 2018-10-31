@@ -62,13 +62,6 @@ function(_report_sdk prefix)
     endif()
   endif()
   message(STATUS "  Object Format: ${SWIFT_SDK_${prefix}_OBJECT_FORMAT}")
-  foreach(arch ${SWIFT_SDK_${prefix}_ARCHITECTURES})
-    if(SWIFT_SDK_${prefix}_ARCH_${arch}_LINKER)
-      message(STATUS "  Linker (${arch}): ${SWIFT_SDK_${prefix}_ARCH_${arch}_LINKER}")
-    else()
-      message(STATUS "  Linker (${arch}): ${CMAKE_LINKER}")
-    endif()
-  endforeach()
 
   foreach(arch ${SWIFT_SDK_${prefix}_ARCHITECTURES})
     message(STATUS
@@ -205,11 +198,6 @@ macro(configure_sdk_unix name architectures)
       endif()
       set(SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_PREBUILT_PATH
           "${SWIFT_ANDROID_NDK_PATH}/toolchains/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${_swift_android_prebuilt_build}")
-
-      # Resolve the correct linker based on the file name of CMAKE_LINKER (being 'ld' or 'ld.gold' the options)
-      get_filename_component(SWIFT_ANDROID_LINKER_NAME "${CMAKE_LINKER}" NAME)
-      set(SWIFT_SDK_ANDROID_ARCH_${arch}_LINKER
-          "${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_PREBUILT_PATH}/bin/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}-${SWIFT_ANDROID_LINKER_NAME}")
     else()
       if(NOT SWIFT_SDK_${prefix}_ARCH_${arch}_PATH)
         set(SWIFT_SDK_${prefix}_ARCH_${arch}_PATH "/")
@@ -282,6 +270,26 @@ macro(configure_sdk_windows name environment architectures)
     # to the driver -- rely on the `INCLUDE` AND `LIB` environment variables
     # instead.
     set(SWIFT_SDK_${prefix}_ARCH_${arch}_PATH "/")
+
+    # NOTE(compnerd) workaround incorrectly extensioned import libraries from
+    # the Windows SDK on case sensitive file systems.
+    swift_windows_arch_spelling(${arch} WinSDKArchitecture)
+    set(WinSDK${arch}UMDir "$ENV{UniversalCRTSdkDir}/Lib/$ENV{UCRTVersion}/um/${WinSDKArchitecture}")
+    set(OverlayDirectory "${CMAKE_BINARY_DIR}/winsdk_lib_${arch}_symlinks")
+
+    file(MAKE_DIRECTORY ${OverlayDirectory})
+
+    file(GLOB libraries RELATIVE "${WinSDK${arch}UMDir}" "${WinSDK${arch}UMDir}/*")
+    foreach(library ${libraries})
+      get_filename_component(name_we "${library}" NAME_WE)
+      get_filename_component(ext "${library}" EXT)
+      string(TOLOWER "${ext}" lowercase_ext)
+      set(lowercase_ext_symlink_name "${name_we}${lowercase_ext}")
+      if(NOT library STREQUAL lowercase_ext_symlink_name)
+        execute_process(COMMAND
+                        "${CMAKE_COMMAND}" -E create_symlink "${WinSDK${arch}UMDir}/${library}" "${OverlayDirectory}/${lowercase_ext_symlink_name}")
+      endif()
+    endforeach()
   endforeach()
 
   # Add this to the list of known SDKs.

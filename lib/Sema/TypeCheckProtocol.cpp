@@ -545,6 +545,14 @@ swift::matchWitness(
     // Result types must match.
     // FIXME: Could allow (trivial?) subtyping here.
     if (!ignoreReturnType) {
+      if (reqResultType->hasDynamicSelfType()) {
+        auto classDecl = witness->getDeclContext()->getSelfClassDecl();
+        if (!classDecl || classDecl->isFinal() ||
+            witnessResultType->hasDynamicSelfType())
+          reqResultType = reqResultType->eraseDynamicSelfType();
+        witnessResultType = witnessResultType->eraseDynamicSelfType();
+      }
+
       auto reqTypeIsIUO =
           req->getAttrs().hasAttribute<ImplicitlyUnwrappedOptionalAttr>();
       auto witnessTypeIsIUO =
@@ -678,6 +686,69 @@ static const RequirementEnvironment &getOrCreateRequirementEnvironment(
   return cacheIter->getSecond();
 }
 
+static Optional<RequirementMatch> findMissingGenericRequirementForSolutionFix(
+    constraints::ConstraintFix *fix, ValueDecl *witness,
+    ProtocolConformance *conformance,
+    const RequirementEnvironment &reqEnvironment) {
+  Type type, missingType;
+  RequirementKind requirementKind;
+
+  using namespace constraints;
+
+  switch (fix->getKind()) {
+  case FixKind::AddConformance: {
+    auto missingConform = (MissingConformance *)fix;
+    requirementKind = RequirementKind::Conformance;
+    type = missingConform->getNonConformingType();
+    missingType = missingConform->getProtocol()->getDeclaredType();
+    break;
+  }
+  case FixKind::SkipSameTypeRequirement: {
+    requirementKind = RequirementKind::SameType;
+    auto requirementFix = (SkipSameTypeRequirement *)fix;
+    type = requirementFix->lhsType();
+    missingType = requirementFix->rhsType();
+    break;
+  }
+  case FixKind::SkipSuperclassRequirement: {
+    requirementKind = RequirementKind::Superclass;
+    auto requirementFix = (SkipSuperclassRequirement *)fix;
+    type = requirementFix->subclassType();
+    missingType = requirementFix->superclassType();
+    break;
+  }
+  default:
+    return Optional<RequirementMatch>();
+  }
+
+  auto missingRequirementMatch = [&](Type type) -> RequirementMatch {
+    Requirement requirement(requirementKind, type, missingType);
+    return RequirementMatch(witness, MatchKind::MissingRequirement,
+                            requirement);
+  };
+
+  if (auto memberTy = type->getAs<DependentMemberType>())
+    return missingRequirementMatch(type);
+
+  type = type->mapTypeOutOfContext();
+  if (type->hasTypeParameter())
+    if (auto env = conformance->getGenericEnvironment())
+      if (auto assocType = env->mapTypeIntoContext(type))
+        return missingRequirementMatch(assocType);
+
+  auto reqSubMap = reqEnvironment.getRequirementToSyntheticMap();
+  auto proto = conformance->getProtocol();
+  Type selfTy = proto->getSelfInterfaceType().subst(reqSubMap);
+  if (type->isEqual(selfTy)) {
+    type = conformance->getType();
+    if (auto agt = type->getAs<AnyGenericType>())
+      type = agt->getDecl()->getDeclaredInterfaceType();
+    return missingRequirementMatch(type);
+  }
+
+  return Optional<RequirementMatch>();
+}
+
 RequirementMatch
 swift::matchWitness(TypeChecker &tc,
                     WitnessChecker::RequirementEnvironmentCache &reqEnvCache,
@@ -758,7 +829,7 @@ swift::matchWitness(TypeChecker &tc,
   auto setup = [&]() -> std::tuple<Optional<RequirementMatch>, Type, Type> {
     // Construct a constraint system to use to solve the equality between
     // the required type and the witness type.
-    cs.emplace(tc, dc, ConstraintSystemOptions());
+    cs.emplace(tc, dc, ConstraintSystemFlags::AllowFixes);
 
     auto reqGenericEnv = reqEnvironment.getSyntheticEnvironment();
     auto reqSubMap = reqEnvironment.getRequirementToSyntheticMap();
@@ -840,8 +911,19 @@ swift::matchWitness(TypeChecker &tc,
     // Try to solve the system disallowing free type variables, because
     // that would resolve in incorrect substitution matching when witness
     // type has free type variables present as well.
-    auto solution = cs->solveSingle(FreeTypeVariableBinding::Disallow);
-    if (!solution)
+    auto solution = cs->solveSingle(FreeTypeVariableBinding::Disallow,
+                                    /* allowFixes */ true);
+
+    // If the types would match but for some other missing conformance, find and
+    // call that out.
+    if (solution && conformance && solution->Fixes.size()) {
+      for (auto fix : solution->Fixes) {
+        if (auto result = findMissingGenericRequirementForSolutionFix(
+                fix, witness, conformance, reqEnvironment))
+          return *result;
+      }
+    }
+    if (!solution || solution->Fixes.size())
       return RequirementMatch(witness, MatchKind::TypeConflict,
                               witnessType);
 
@@ -1961,7 +2043,17 @@ static void addOptionalityFixIts(
 /// \brief Diagnose a requirement match, describing what went wrong (or not).
 static void
 diagnoseMatch(ModuleDecl *module, NormalProtocolConformance *conformance,
-              ValueDecl *req, const RequirementMatch &match){
+              ValueDecl *req, const RequirementMatch &match) {
+
+  // If the name doesn't match and that's not the only problem,
+  // it is likely this witness wasn't intended to be a match at all, so omit
+  // diagnosis.
+  if (match.Kind != MatchKind::RenamedMatch &&
+      !match.Witness->getAttrs().hasAttribute<ImplementsAttr>() &&
+      match.Witness->getFullName() &&
+      req->getFullName() != match.Witness->getFullName())
+    return;
+
   // Form a string describing the associated type deductions.
   // FIXME: Determine which associated types matter, and only print those.
   llvm::SmallString<128> withAssocTypes;
@@ -2013,6 +2105,12 @@ diagnoseMatch(ModuleDecl *module, NormalProtocolConformance *conformance,
       fixItOverrideDeclarationTypes(diag, match.Witness, req);
     break;
   }
+
+  case MatchKind::MissingRequirement:
+    diags.diagnose(match.Witness, diag::protocol_witness_missing_requirement,
+                   match.WitnessType, match.MissingRequirement->getSecondType(),
+                   (unsigned)match.MissingRequirement->getKind());
+    break;
 
   case MatchKind::ThrowsConflict:
     diags.diagnose(match.Witness, diag::protocol_witness_throws_conflict);
@@ -2711,11 +2809,11 @@ void ConformanceChecker::checkNonFinalClassWitness(ValueDecl *requirement,
       emitDeclaredHereIfNeeded(diags, diagLoc, witness);
 
       if (auto requirementRepr = *constraint) {
-        diags.diagnose(requirementRepr->getEqualLoc(),
+        diags.diagnose(requirementRepr->getSeparatorLoc(),
                        diag::witness_self_weaken_same_type,
                        requirementRepr->getFirstType(),
                        requirementRepr->getSecondType())
-          .fixItReplace(requirementRepr->getEqualLoc(), ":");
+          .fixItReplace(requirementRepr->getSeparatorLoc(), ":");
       }
     }
   }
@@ -2986,16 +3084,14 @@ ConformanceChecker::resolveWitnessViaLookup(ValueDecl *requirement) {
 
       break;
 
-    case CheckKind::WitnessUnavailable: {
-      bool emitError = !witness->getASTContext().LangOpts.isSwiftVersion3();
-      diagnoseOrDefer(requirement, /*isError=*/emitError,
-        [witness, requirement, emitError](
+    case CheckKind::WitnessUnavailable:
+      diagnoseOrDefer(requirement, /*isError=*/true,
+        [witness, requirement](
                                     NormalProtocolConformance *conformance) {
           auto &diags = witness->getASTContext().Diags;
           SourceLoc diagLoc = getLocForDiagnosingWitness(conformance, witness);
           diags.diagnose(diagLoc,
-                         emitError ? diag::witness_unavailable
-                                   : diag::witness_unavailable_warn,
+                         diag::witness_unavailable,
                          witness->getDescriptiveKind(),
                          witness->getFullName(),
                          conformance->getProtocol()->getFullName());
@@ -3005,7 +3101,6 @@ ConformanceChecker::resolveWitnessViaLookup(ValueDecl *requirement) {
                          requirement->getFullName());
         });
       break;
-    }
     }
 
     if (auto *classDecl = Adoptee->getClassOrBoundGenericClass()) {
@@ -3433,7 +3528,7 @@ void ConformanceChecker::ensureRequirementsAreSatisfied(
       DC, Loc, Loc,
       // FIXME: maybe this should be the conformance's type
       proto->getDeclaredInterfaceType(),
-      { Type(proto->getProtocolSelfType()) },
+      { proto->getSelfInterfaceType() },
       proto->getRequirementSignature(),
       QuerySubstitutionMap{substitutions},
       TypeChecker::LookUpConformance(DC),
@@ -3958,7 +4053,7 @@ Optional<ProtocolConformanceRef> TypeChecker::conformsToProtocol(
 
     auto conditionalCheckResult = checkGenericArguments(
         DC, ComplainLoc, noteLoc, T,
-        {Type(lookupResult->getRequirement()->getProtocolSelfType())},
+        {lookupResult->getRequirement()->getSelfInterfaceType()},
         *condReqs,
         [](SubstitutableType *dependentType) { return Type(dependentType); },
         LookUpConformance(DC), options);
@@ -5320,7 +5415,7 @@ void TypeChecker::inferDefaultWitnesses(ProtocolDecl *proto) {
   for (const auto &req : proto->getRequirementSignature()) {
     if (req.getKind() != RequirementKind::Conformance)
       continue;
-    if (req.getFirstType()->isEqual(proto->getProtocolSelfType()))
+    if (req.getFirstType()->isEqual(proto->getSelfInterfaceType()))
       continue;
 
     // Find the innermost dependent member type (e.g., Self.AssocType), so
@@ -5333,7 +5428,7 @@ void TypeChecker::inferDefaultWitnesses(ProtocolDecl *proto) {
              depMemTy->getBase()->getAs<DependentMemberType>())
       depMemTy = innerDepMemTy;
 
-    if (!depMemTy->getBase()->isEqual(proto->getProtocolSelfType()))
+    if (!depMemTy->getBase()->isEqual(proto->getSelfInterfaceType()))
       continue;
 
     auto assocType = depMemTy->getAssocType();

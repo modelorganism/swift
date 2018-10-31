@@ -1,10 +1,10 @@
 // RUN: %empty-directory(%t)
-// RUN: for x in %platform-sdk-overlay-dir/*.swiftinterface; do [[ $(basename "$x") = Swift.swiftinterface || $(basename "$x") = simd.swiftinterface || $(basename "$x") = SwiftLang.swiftinterface ]] && continue; %target-swift-frontend "$x" -emit-module -o %t/$(basename "${x/.*}").swiftmodule -disable-objc-attr-requires-foundation-module -enable-resilience -Fsystem %sdk/System/Library/PrivateFrameworks/ -swift-version 4 || echo '%target-os:' $(basename "$x") >> %t/failures.txt; done
+// RUN: for x in %platform-sdk-overlay-dir/*.swiftinterface; do [[ $(basename "$x") = Swift.swiftinterface || $(basename "$x") = simd.swiftinterface || $(basename "$x") = SwiftLang.swiftinterface ]] && continue; %target-swift-frontend "$x" -emit-module -o %t/$(basename "$x" .swiftinterface).swiftmodule -disable-objc-attr-requires-foundation-module -enable-resilience -Fsystem %sdk/System/Library/PrivateFrameworks/ -swift-version 4 || echo '%target-os:' $(basename "$x") >> %t/failures.txt; done
 // RUN: diff <(grep '%target-os:' %s) <(sort -f %t/failures.txt)
 
 // REQUIRES: nonexecutable_test
 
-// The following textual interfaces (in alphabetical order) are known not to
+// The following parseable interfaces (in alphabetical order) are known not to
 // work with these settings.
 
 // Needs to be built as Swift 4.2.

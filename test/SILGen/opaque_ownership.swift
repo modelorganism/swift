@@ -45,8 +45,10 @@ public func takeDecoder(from decoder: Decoder) throws -> Builtin.Int1 {
 // ---
 // CHECK-LABEL: sil @$ss13unsafeBitCast_2toq_x_q_mtr0_lF : $@convention(thin) <T, U> (@in_guaranteed T, @thick U.Type) -> @out U {
 // CHECK: bb0([[ARG0:%.*]] : @guaranteed $T, [[ARG1:%.*]] : @trivial $@thick U.Type):
-// CHECK:   [[RESULT:%.*]] = unchecked_bitwise_cast [[ARG0]] : $T to $U
+// CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG0]] : $T
+// CHECK:   [[RESULT:%.*]] = unchecked_bitwise_cast [[ARG_COPY]] : $T to $U
 // CHECK:   [[RESULT_COPY:%.*]] = copy_value [[RESULT]] : $U
+// CHECK:   destroy_value [[ARG_COPY]] : $T
 // CHECK:   return [[RESULT_COPY]] : $U
 // CHECK-LABEL: } // end sil function '$ss13unsafeBitCast_2toq_x_q_mtr0_lF'
 public func unsafeBitCast<T, U>(_ x: T, to type: U.Type) -> U {
@@ -237,10 +239,8 @@ public struct EnumIter<Base : IP> : IP, Seq {
 // CHECK:  [[MT:%.*]] = metatype $@thin EnumIter<Base.Iterator>.Type
 // CHECK:  [[FIELD:%.*]] = struct_extract %0 : $EnumSeq<Base>, #EnumSeq._base
 // CHECK:  [[COPY:%.*]] = copy_value [[FIELD]] : $Base
-// CHECK:  [[BORROW:%.*]] = begin_borrow [[COPY]] : $Base
 // CHECK:  [[WT:%.*]] = witness_method $Base, #Seq.makeIterator!1 : <Self where Self : Seq> (Self) -> () -> Self.Iterator : $@convention(witness_method: Seq) <τ_0_0 where τ_0_0 : Seq> (@in_guaranteed τ_0_0) -> @out τ_0_0.Iterator
-// CHECK:  [[ITER:%.*]] = apply [[WT]]<Base>([[BORROW]]) : $@convention(witness_method: Seq) <τ_0_0 where τ_0_0 : Seq> (@in_guaranteed τ_0_0) -> @out τ_0_0.Iterator
-// CHECK:  end_borrow [[BORROW]] : $Base
+// CHECK:  [[ITER:%.*]] = apply [[WT]]<Base>([[COPY]]) : $@convention(witness_method: Seq) <τ_0_0 where τ_0_0 : Seq> (@in_guaranteed τ_0_0) -> @out τ_0_0.Iterator
 // CHECK:  destroy_value [[COPY]] : $Base
 // CHECK: [[FN:%.*]] = function_ref @$ss8EnumIterV5_baseAByxGx_tcfC : $@convention(method) <τ_0_0 where τ_0_0 : IP> (@in τ_0_0, @thin EnumIter<τ_0_0>.Type) -> @out EnumIter<τ_0_0>
 // CHECK:  [[RET:%.*]] = apply [[FN]]<Base.Iterator>([[ITER]], [[MT]]) : $@convention(method) <τ_0_0 where τ_0_0 : IP> (@in τ_0_0, @thin EnumIter<τ_0_0>.Type) -> @out EnumIter<τ_0_0>

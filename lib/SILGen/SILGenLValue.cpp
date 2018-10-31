@@ -50,10 +50,8 @@ struct LValueWritebackCleanup : Cleanup {
     FullExpr scope(SGF.Cleanups, loc);
 
     // TODO: honor forUnwind!
-    auto &evaluation = *SGF.FormalEvalContext.find(Depth);
-    assert(evaluation.getKind() == FormalAccess::Exclusive);
-    auto &lvalue = static_cast<ExclusiveBorrowFormalAccess &>(evaluation);
-    lvalue.performWriteback(SGF, /*isFinal*/ false);
+    auto &evaluation = getEvaluation(SGF);
+    evaluation.performWriteback(SGF, /*isFinal*/ false);
   }
 
   void dump(SILGenFunction &) const override {
@@ -62,6 +60,13 @@ struct LValueWritebackCleanup : Cleanup {
                  << "State: " << getState() << " Depth: " << Depth.getDepth()
                  << "\n";
 #endif
+  }
+
+private:
+  ExclusiveBorrowFormalAccess &getEvaluation(SILGenFunction &SGF) {
+    auto &evaluation = *SGF.FormalEvalContext.find(Depth);
+    assert(evaluation.getKind() == FormalAccess::Exclusive);
+    return static_cast<ExclusiveBorrowFormalAccess &>(evaluation);
   }
 };
 
@@ -73,7 +78,7 @@ static void pushWriteback(SILGenFunction &SGF,
                           std::unique_ptr<LogicalPathComponent> &&comp,
                           ManagedValue base,
                           MaterializedLValue materialized) {
-  assert(SGF.InFormalEvaluationScope);
+  assert(SGF.isInFormalEvaluationScope());
 
   // Push a cleanup to execute the writeback consistently.
   auto &context = SGF.FormalEvalContext;
@@ -361,7 +366,7 @@ ManagedValue LogicalPathComponent::project(SILGenFunction &SGF,
     return std::move(*this).projectForRead(SGF, loc, base, accessKind);
 
   // AccessKind is Write or ReadWrite. We need to emit a get and set.
-  assert(SGF.InFormalEvaluationScope &&
+  assert(SGF.isInFormalEvaluationScope() &&
          "materializing l-value for modification without writeback scope");
 
   // Clone anything else about the component that we might need in the
@@ -421,7 +426,7 @@ void LogicalPathComponent::writeback(SILGenFunction &SGF, SILLocation loc,
 InOutConversionScope::InOutConversionScope(SILGenFunction &SGF)
   : SGF(SGF)
 {
-  assert(SGF.InFormalEvaluationScope
+  assert(SGF.isInFormalEvaluationScope()
          && "inout conversions should happen in writeback scopes");
   assert(!SGF.InInOutConversionScope
          && "inout conversions should not be nested");
@@ -551,7 +556,7 @@ static SILValue enterAccessScope(SILGenFunction &SGF, SILLocation loc,
   auto silAccessKind = isReadAccess(accessKind) ? SILAccessKind::Read
                                                 : SILAccessKind::Modify;
 
-  assert(SGF.InFormalEvaluationScope &&
+  assert(SGF.isInFormalEvaluationScope() &&
          "tried to enter access scope without a writeback scope!");
 
   // Enter the access.
@@ -653,7 +658,7 @@ struct UnenforcedAccessCleanup : Cleanup {
 
 SILValue UnenforcedFormalAccess::enter(SILGenFunction &SGF, SILLocation loc,
                                        SILValue address, SILAccessKind kind) {
-  assert(SGF.InFormalEvaluationScope);
+  assert(SGF.isInFormalEvaluationScope());
 
   UnenforcedAccess access;
   SILValue accessAddress = access.beginAccess(SGF, loc, address, kind);
@@ -1145,9 +1150,14 @@ namespace {
                         ManagedValue base, SILDeclRef accessor) &&
     {
       AccessorArgs result;
-      if (base)
-        result.base = SGF.prepareAccessorBaseArg(loc, base, BaseFormalType,
-                                                 accessor);
+      if (base) {
+        // Borrow the base, because we may need it again to invoke other
+        // accessors.
+        result.base = SGF.prepareAccessorBaseArg(loc,
+                                             base.formalAccessBorrow(SGF, loc),
+                                             BaseFormalType,
+                                             accessor);
+      }
 
       if (!Indices.isNull())
         result.Indices = std::move(Indices);
@@ -1187,7 +1197,7 @@ namespace {
       OS.indent(indent) << name << "(" << Storage->getBaseName() << ")";
       if (IndexExprForDiagnostics) {
         OS << " subscript_index:\n";
-        IndexExprForDiagnostics->print(OS, 2);
+        IndexExprForDiagnostics->dump(OS, 2);
       }
       OS << '\n';
     }
@@ -1491,7 +1501,7 @@ namespace {
 
     ManagedValue project(SILGenFunction &SGF, SILLocation loc,
                          ManagedValue base) && override {
-      assert(SGF.InFormalEvaluationScope &&
+      assert(SGF.isInFormalEvaluationScope() &&
              "offsetting l-value for modification without writeback scope");
 
       std::pair<ManagedValue, ManagedValue> result;
@@ -1600,7 +1610,7 @@ namespace {
 
     ManagedValue project(SILGenFunction &SGF, SILLocation loc,
                          ManagedValue base) && override {
-      assert(SGF.InFormalEvaluationScope &&
+      assert(SGF.isInFormalEvaluationScope() &&
              "offsetting l-value for modification without writeback scope");
 
       ManagedValue result;
@@ -1845,7 +1855,7 @@ namespace {
   
     ManagedValue project(SILGenFunction &SGF, SILLocation loc,
                          ManagedValue base) && override {
-      assert(SGF.InFormalEvaluationScope &&
+      assert(SGF.isInFormalEvaluationScope() &&
              "offsetting l-value for modification without writeback scope");
       if (isReadAccess(getAccessKind())) {
         // For a read-only access, project the key path as if immutable,
@@ -2138,7 +2148,7 @@ LValue SILGenFunction::emitLValue(Expr *e, SGFAccessKind accessKind,
   // Some lvalue nodes (namely BindOptionalExprs) require immediate evaluation
   // of their subexpression, so we must have a writeback scope open while
   // building an lvalue.
-  assert(InFormalEvaluationScope && "must be in a formal evaluation scope");
+  assert(isInFormalEvaluationScope() && "must be in a formal evaluation scope");
 
   LValue r = SILGenLValue(*this).visit(e, accessKind, options);
   // If the final component has an abstraction change, introduce a
@@ -2269,6 +2279,7 @@ LValue SILGenLValue::visitRec(Expr *e, SGFAccessKind accessKind,
 LValue SILGenLValue::visitExpr(Expr *e, SGFAccessKind accessKind,
                                LValueOptions options) {
   e->dump(llvm::errs());
+  llvm::errs() << "\n";
   llvm_unreachable("unimplemented lvalue expr");
 }
 
