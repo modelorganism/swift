@@ -926,6 +926,36 @@ public:
         if (auto *newPattern = TC.resolvePattern(pattern, DC,
                                                  /*isStmtCondition*/false)) {
           pattern = newPattern;
+
+          // Use of 'as!' or 'as?' will cause errors in the type checking below.
+          // Catch that here and give a clear error message.
+          if (auto VarPat = dyn_cast<VarPattern>(pattern)) {
+            if (auto ExprPat = dyn_cast<ExprPattern>(VarPat->getSubPattern())) {
+              if (auto SubExpr = ExprPat->getSubExpr())
+                if (auto SeqExpr = dyn_cast<SequenceExpr>(SubExpr)) {
+                  SourceLoc LastPunctLoc;
+                  SeqExpr->forEachImmediateChildExpr([&](Expr *E) -> Expr * {
+                    SourceLoc PunctLoc;
+                    bool IsForce;
+                    if (auto Asq = dyn_cast<ConditionalCheckedCastExpr>(E)) {
+                      PunctLoc = Asq->getQuestionLoc();
+                      IsForce = false;
+                    } else if (auto Asf = dyn_cast<ForcedCheckedCastExpr>(E)) {
+                      PunctLoc = Asf->getExclaimLoc();
+                      IsForce = true;
+                    } else
+                      return E; // This child expr isn't one we're looking for.
+
+                    if (PunctLoc != LastPunctLoc) // Only 1 diag per `as?`
+                      TC.diagnose(E->getLoc(), diag::case_as_punct, IsForce)
+                          .fixItRemove(SourceRange(PunctLoc));
+                    LastPunctLoc = PunctLoc;
+                    return new (TC.Context) ErrorExpr(E->getSourceRange());
+                  });
+                }
+            }
+          }
+
           // Coerce the pattern to the subject's type.
           TypeResolutionOptions patternOptions(TypeResolverContext::InExpression);
           if (!subjectType ||
@@ -951,7 +981,8 @@ public:
               return;
             for (auto *expected : vars) {
               if (expected->hasName() && expected->getName() == VD->getName()) {
-                if (VD->hasType() && expected->hasType() && !expected->isInvalid() &&
+                if (VD->hasType() && expected->hasType() && !VD->isInvalid() &&
+                    !expected->isInvalid() &&
                     !VD->getType()->isEqual(expected->getType())) {
                   TC.diagnose(VD->getLoc(), diag::type_mismatch_multiple_pattern_list,
                               VD->getType(), expected->getType());
