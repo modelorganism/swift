@@ -1700,11 +1700,6 @@ using TargetWitnessTablePointer =
 
 using WitnessTablePointer = TargetWitnessTablePointer<InProcess>;
 
-using AssociatedTypeAccessFunction =
-  SWIFT_CC(swift) MetadataResponse(MetadataRequest request,
-                                  const Metadata *self,
-                                  const WitnessTable *selfConformance);
-
 using AssociatedWitnessTableAccessFunction =
   SWIFT_CC(swift) WitnessTable *(const Metadata *associatedType,
                                  const Metadata *self,
@@ -1994,7 +1989,7 @@ struct TargetResilientWitnessTable final
 using ResilientWitnessTable = TargetResilientWitnessTable<InProcess>;
 
 /// \brief The control structure of a generic or resilient protocol
-/// conformance.
+/// conformance, which is embedded in the protocol conformance descriptor.
 ///
 /// Witness tables need to be instantiated at runtime in these cases:
 /// - For a generic conforming type, associated type requirements might be
@@ -2013,23 +2008,15 @@ struct TargetGenericWitnessTable {
   /// The amount of private storage to allocate before the address point,
   /// in words. This memory is zeroed out in the instantiated witness table
   /// template.
-  uint16_t WitnessTablePrivateSizeInWords;
-
-  /// The protocol descriptor. Only used for resilient conformances.
-  RelativeIndirectablePointer<ProtocolDescriptor,
-                              /*nullable*/ true> Protocol;
-
-  /// The pattern.
-  RelativeDirectPointer<const TargetWitnessTable<Runtime>> Pattern;
-
-  /// The resilient witness table, if any.
-  RelativeDirectPointer<const TargetResilientWitnessTable<Runtime>,
-                        /*nullable*/ true> ResilientWitnesses;
+  ///
+  /// The low bit is used to indicate whether this witness table is known
+  /// to require instantiation.
+  uint16_t WitnessTablePrivateSizeInWordsAndRequiresInstantiation;
 
   /// The instantiation function, which is called after the template is copied.
   RelativeDirectPointer<void(TargetWitnessTable<Runtime> *instantiatedTable,
                              const TargetMetadata<Runtime> *type,
-                             void ** const *instantiationArgs),
+                             const void * const *instantiationArgs),
                         /*nullable*/ true> Instantiator;
 
   using PrivateDataType = void *[swift::NumGenericMetadataPrivateDataWords];
@@ -2037,6 +2024,15 @@ struct TargetGenericWitnessTable {
   /// Private data for the instantiator.  Out-of-line so that the rest
   /// of this structure can be constant.
   RelativeDirectPointer<PrivateDataType> PrivateData;
+
+  uint16_t getWitnessTablePrivateSizeInWords() const {
+    return WitnessTablePrivateSizeInWordsAndRequiresInstantiation >> 1;
+  }
+
+  /// Whether the witness table is known to require instantiation.
+  uint16_t requiresInstantiation() const {
+    return WitnessTablePrivateSizeInWordsAndRequiresInstantiation & 0x01;
+  }
 };
 using GenericWitnessTable = TargetGenericWitnessTable<InProcess>;
 
@@ -2215,6 +2211,14 @@ struct TargetTypeReference {
 };
 using TypeReference = TargetTypeReference<InProcess>;
 
+/// Header containing information about the resilient witnesses in a
+/// protocol conformance descriptor.
+template <typename Runtime>
+struct TargetResilientWitnessesHeader {
+  uint32_t NumWitnesses;
+};
+using ResilientWitnessesHeader = TargetResilientWitnessesHeader<InProcess>;
+
 /// The structure of a protocol conformance.
 ///
 /// This contains enough static information to recover the witness table for a
@@ -2224,12 +2228,18 @@ struct TargetProtocolConformanceDescriptor final
   : public swift::ABI::TrailingObjects<
              TargetProtocolConformanceDescriptor<Runtime>,
              RelativeContextPointer<Runtime>,
-             TargetGenericRequirementDescriptor<Runtime>> {
+             TargetGenericRequirementDescriptor<Runtime>,
+             TargetResilientWitnessesHeader<Runtime>,
+             TargetResilientWitness<Runtime>,
+             TargetGenericWitnessTable<Runtime>> {
 
   using TrailingObjects = swift::ABI::TrailingObjects<
                              TargetProtocolConformanceDescriptor<Runtime>,
                              RelativeContextPointer<Runtime>,
-                             TargetGenericRequirementDescriptor<Runtime>>;
+                             TargetGenericRequirementDescriptor<Runtime>,
+                             TargetResilientWitnessesHeader<Runtime>,
+                             TargetResilientWitness<Runtime>,
+                             TargetGenericWitnessTable<Runtime>>;
   friend TrailingObjects;
 
   template<typename T>
@@ -2238,11 +2248,14 @@ struct TargetProtocolConformanceDescriptor final
 public:
   using WitnessTableAccessorFn
     = const TargetWitnessTable<Runtime> *(const TargetMetadata<Runtime>*,
-                                          const TargetWitnessTable<Runtime> **,
-                                          size_t);
+                                          const TargetWitnessTable<Runtime> **);
 
   using GenericRequirementDescriptor =
     TargetGenericRequirementDescriptor<Runtime>;
+
+  using ResilientWitnessesHeader = TargetResilientWitnessesHeader<Runtime>;
+  using ResilientWitness = TargetResilientWitness<Runtime>;
+  using GenericWitnessTable = TargetGenericWitnessTable<Runtime>;
 
 private:
   /// The protocol being conformed to.
@@ -2251,30 +2264,20 @@ private:
   // Some description of the type that conforms to the protocol.
   TargetTypeReference<Runtime> TypeRef;
 
-  // The conformance, or a generator function for the conformance.
-  union {
-    /// A direct reference to the witness table for the conformance.
-    RelativeDirectPointer<const TargetWitnessTable<Runtime>> WitnessTable;
-    
-    /// A function that produces the witness table given an instance of the
-    /// type.
-    RelativeDirectPointer<WitnessTableAccessorFn> WitnessTableAccessor;
-  };
+  /// The witness table pattern, which may also serve as the witness table.
+  RelativeDirectPointer<const TargetWitnessTable<Runtime>> WitnessTablePattern;
 
   /// Various flags, including the kind of conformance.
   ConformanceFlags Flags;
 
 public:
-  const ProtocolDescriptor *getProtocol() const {
+  ConstTargetPointer<Runtime, TargetProtocolDescriptor<Runtime>>
+  getProtocol() const {
     return Protocol;
   }
 
   TypeReferenceKind getTypeKind() const {
     return Flags.getTypeReferenceKind();
-  }
-
-  typename ConformanceFlags::ConformanceKind getConformanceKind() const {
-    return Flags.getConformanceKind();
   }
 
   const char *getDirectObjCClassName() const {
@@ -2296,6 +2299,18 @@ public:
     return this->template getTrailingObjects<RelativeContextPointer<Runtime>>();
   }
 
+  /// Whether this conformance is non-unique because it has been synthesized
+  /// for a foreign type.
+  bool isSynthesizedNonUnique() const {
+    return Flags.isSynthesizedNonUnique();
+  }
+
+  /// Whether this conformance has any conditional requirements that need to
+  /// be evaluated.
+  bool hasConditionalRequirements() const {
+    return Flags.getNumConditionalRequirements() > 0;
+  }
+
   /// Retrieve the conditional requirements that must also be
   /// satisfied
   llvm::ArrayRef<GenericRequirementDescriptor>
@@ -2304,31 +2319,12 @@ public:
             Flags.getNumConditionalRequirements()};
   }
 
-  /// Get the directly-referenced static witness table.
-  const swift::TargetWitnessTable<Runtime> *getStaticWitnessTable() const {
-    switch (getConformanceKind()) {
-    case ConformanceFlags::ConformanceKind::WitnessTable:
-      break;
-        
-    case ConformanceFlags::ConformanceKind::WitnessTableAccessor:
-    case ConformanceFlags::ConformanceKind::ConditionalWitnessTableAccessor:
-      assert(false && "not witness table");
-    }
-    return WitnessTable;
+  /// Get the directly-referenced witness table pattern, which may also
+  /// serve as the witness table.
+  const swift::TargetWitnessTable<Runtime> *getWitnessTablePattern() const {
+    return WitnessTablePattern;
   }
-  
-  WitnessTableAccessorFn *getWitnessTableAccessor() const {
-    switch (getConformanceKind()) {
-    case ConformanceFlags::ConformanceKind::WitnessTableAccessor:
-    case ConformanceFlags::ConformanceKind::ConditionalWitnessTableAccessor:
-      break;
-        
-    case ConformanceFlags::ConformanceKind::WitnessTable:
-      assert(false && "not witness table accessor");
-    }
-    return WitnessTableAccessor;
-  }
-  
+
   /// Get the canonical metadata for the type referenced by this record, or
   /// return null if the record references a generic or universal type.
   const TargetMetadata<Runtime> *getCanonicalTypeMetadata() const;
@@ -2338,6 +2334,24 @@ public:
   /// type.
   const swift::TargetWitnessTable<Runtime> *
   getWitnessTable(const TargetMetadata<Runtime> *type) const;
+
+  /// Retrieve the resilient witnesses.
+  ArrayRef<ResilientWitness> getResilientWitnesses() const{
+    if (!Flags.hasResilientWitnesses())
+      return { };
+
+    return ArrayRef<ResilientWitness>(
+             this->template getTrailingObjects<ResilientWitness>(),
+             numTrailingObjects(OverloadToken<ResilientWitness>()));
+  }
+
+  ConstTargetPointer<Runtime, GenericWitnessTable>
+  getGenericWitnessTable() const {
+    if (!Flags.hasGenericWitnessTable())
+      return nullptr;
+
+    return this->template getTrailingObjects<GenericWitnessTable>();
+  }
 
 #if !defined(NDEBUG) && SWIFT_OBJC_INTEROP
   void dump() const;
@@ -2361,6 +2375,21 @@ private:
 
   size_t numTrailingObjects(OverloadToken<GenericRequirementDescriptor>) const {
     return Flags.getNumConditionalRequirements();
+  }
+
+  size_t numTrailingObjects(OverloadToken<ResilientWitnessesHeader>) const {
+    return Flags.hasResilientWitnesses() ? 1 : 0;
+  }
+
+  size_t numTrailingObjects(OverloadToken<ResilientWitness>) const {
+    return Flags.hasResilientWitnesses()
+      ? this->template getTrailingObjects<ResilientWitnessesHeader>()
+          ->NumWitnesses
+      : 0;
+  }
+
+  size_t numTrailingObjects(OverloadToken<GenericWitnessTable>) const {
+    return Flags.hasGenericWitnessTable() ? 1 : 0;
   }
 };
 using ProtocolConformanceDescriptor
@@ -2935,6 +2964,12 @@ public:
     return {this->template getTrailingObjects<
                              TargetProtocolRequirement<Runtime>>(),
             NumRequirements};
+  }
+
+  /// Retrieve the requirement base descriptor address.
+  ConstTargetPointer<Runtime, TargetProtocolRequirement<Runtime>>
+  getRequirementBaseDescriptor() const {
+    return getRequirements().data() - WitnessTableFirstRequirementOffset;
   }
 
 #ifndef NDEBUG
@@ -3612,11 +3647,23 @@ using StoredClassMetadataBounds =
   TargetStoredClassMetadataBounds<InProcess>;
 
 template <typename Runtime>
+struct TargetResilientSuperclass {
+  /// The superclass of this class.  This pointer can be interpreted
+  /// using the superclass reference kind stored in the type context
+  /// descriptor flags.  It is null if the class has no formal superclass.
+  ///
+  /// Note that SwiftObject, the implicit superclass of all Swift root
+  /// classes when building with ObjC compatibility, does not appear here.
+  TargetRelativeDirectPointer<Runtime, const void, /*nullable*/true> Superclass;
+};
+
+template <typename Runtime>
 class TargetClassDescriptor final
     : public TargetTypeContextDescriptor<Runtime>,
       public TrailingGenericContextObjects<TargetClassDescriptor<Runtime>,
                               TargetTypeGenericContextDescriptorHeader,
                               /*additional trailing objects:*/
+                              TargetResilientSuperclass<Runtime>,
                               TargetForeignMetadataInitialization<Runtime>,
                               TargetSingletonMetadataInitialization<Runtime>,
                               TargetVTableDescriptorHeader<Runtime>,
@@ -3627,6 +3674,7 @@ private:
   using TrailingGenericContextObjects =
     TrailingGenericContextObjects<TargetClassDescriptor<Runtime>,
                                   TargetTypeGenericContextDescriptorHeader,
+                                  TargetResilientSuperclass<Runtime>,
                                   TargetForeignMetadataInitialization<Runtime>,
                                   TargetSingletonMetadataInitialization<Runtime>,
                                   TargetVTableDescriptorHeader<Runtime>,
@@ -3643,6 +3691,7 @@ public:
   using VTableDescriptorHeader = TargetVTableDescriptorHeader<Runtime>;
   using OverrideTableHeader = TargetOverrideTableHeader<Runtime>;
   using MethodOverrideDescriptor = TargetMethodOverrideDescriptor<Runtime>;
+  using ResilientSuperclass = TargetResilientSuperclass<Runtime>;
   using ForeignMetadataInitialization =
     TargetForeignMetadataInitialization<Runtime>;
   using SingletonMetadataInitialization =
@@ -3658,22 +3707,14 @@ public:
   using TrailingGenericContextObjects::getGenericParams;
   using TargetTypeContextDescriptor<Runtime>::getTypeContextDescriptorFlags;
 
-  /// The superclass of this class.  This pointer can be interpreted
-  /// using the superclass reference kind stored in the type context
-  /// descriptor flags.  It is null if the class has no formal superclass.
-  ///
-  /// Note that SwiftObject, the implicit superclass of all Swift root
-  /// classes when building with ObjC compatibility, does not appear here.
-  TargetRelativeDirectPointer<Runtime, const void, /*nullable*/true> Superclass;
-
-  /// Does this class have a formal superclass?
-  bool hasSuperclass() const {
-    return !Superclass.isNull();
+  TypeReferenceKind getResilientSuperclassReferenceKind() const {
+    return getTypeContextDescriptorFlags()
+      .class_getResilientSuperclassReferenceKind();
   }
 
-  TypeReferenceKind getSuperclassReferenceKind() const {
-    return getTypeContextDescriptorFlags().class_getSuperclassReferenceKind();
-  }
+  /// The type of the superclass, expressed as a mangled type name that can
+  /// refer to the generic arguments of the subclass type.
+  TargetRelativeDirectPointer<Runtime, const char> SuperclassType;
 
   union {
     /// If this descriptor does not have a resilient superclass, this is the
@@ -3734,6 +3775,10 @@ private:
   
   using TrailingGenericContextObjects::numTrailingObjects;
 
+  size_t numTrailingObjects(OverloadToken<ResilientSuperclass>) const {
+    return this->hasResilientSuperclass() ? 1 : 0;
+  }
+
   size_t numTrailingObjects(OverloadToken<ForeignMetadataInitialization>) const{
     return this->hasForeignMetadataInitialization() ? 1 : 0;
   }
@@ -3765,6 +3810,12 @@ private:
   }
 
 public:
+  const TargetRelativeDirectPointer<Runtime, const void, /*nullable*/true> &
+  getResilientSuperclass() const {
+    assert(this->hasResilientSuperclass());
+    return this->template getTrailingObjects<ResilientSuperclass>()->Superclass;
+  }
+
   const ForeignMetadataInitialization &getForeignMetadataInitialization() const{
     assert(this->hasForeignMetadataInitialization());
     return *this->template getTrailingObjects<ForeignMetadataInitialization>();

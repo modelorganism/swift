@@ -361,6 +361,7 @@ private:
     StringRef File = llvm::sys::path::filename(Filename);
     llvm::SmallString<512> Path(Filename);
     llvm::sys::path::remove_filename(Path);
+    llvm::sys::path::remove_dots(Path);
     llvm::DIFile *F = DBuilder.createFile(DebugPrefixMap.remapPath(File),
                                           DebugPrefixMap.remapPath(Path));
 
@@ -1021,6 +1022,12 @@ private:
     switch (BaseTy->getKind()) {
     case TypeKind::BuiltinInteger: {
       Encoding = llvm::dwarf::DW_ATE_unsigned;
+      SizeInBits = getSizeOfBasicType(DbgTy);
+      break;
+    }
+
+    case TypeKind::BuiltinIntegerLiteral: {
+      Encoding = llvm::dwarf::DW_ATE_unsigned; // ?
       SizeInBits = getSizeOfBasicType(DbgTy);
       break;
     }

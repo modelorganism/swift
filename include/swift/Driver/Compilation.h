@@ -180,10 +180,6 @@ private:
   /// by \c BatchCount.
   const Optional<unsigned> BatchSizeLimit;
 
-  /// In order to test repartitioning, set to true if
-  /// -driver-force-one-batch-repartition is present.
-  const bool ForceOneBatchRepartition = false;
-
   /// True if temporary files should not be deleted.
   const bool SaveTemps;
 
@@ -209,6 +205,10 @@ private:
   /// The limit for the number of files to pass on the command line. Beyond this
   /// limit filelists will be used.
   size_t FilelistThreshold;
+
+  /// Scaffolding to permit experimentation with finer-grained dependencies and
+  /// faster rebuilds.
+  const bool EnableExperimentalDependencies;
 
   template <typename T>
   static T *unwrap(const std::unique_ptr<T> &p) {
@@ -236,10 +236,10 @@ public:
               unsigned BatchSeed = 0,
               Optional<unsigned> BatchCount = None,
               Optional<unsigned> BatchSizeLimit = None,
-              bool ForceOneBatchRepartition = false,
               bool SaveTemps = false,
               bool ShowDriverTimeCompilation = false,
-              std::unique_ptr<UnifiedStatsReporter> Stats = nullptr);
+              std::unique_ptr<UnifiedStatsReporter> Stats = nullptr,
+              bool EnableExperimentalDependencies = false);
   ~Compilation();
 
   ToolChain const &getToolChain() const {
@@ -294,11 +294,13 @@ public:
     EnableIncrementalBuild = false;
   }
 
+  bool getEnableExperimentalDependencies() const {
+    return EnableExperimentalDependencies;
+  }
+
   bool getBatchModeEnabled() const {
     return EnableBatchMode;
   }
-
-  bool getForceOneBatchRepartition() const { return ForceOneBatchRepartition; }
 
   bool getContinueBuildingAfterErrors() const {
     return ContinueBuildingAfterErrors;

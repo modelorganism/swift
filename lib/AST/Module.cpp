@@ -353,8 +353,8 @@ void SourceLookupCache::invalidate() {
 
 ModuleDecl::ModuleDecl(Identifier name, ASTContext &ctx)
   : DeclContext(DeclContextKind::Module, nullptr),
-    TypeDecl(DeclKind::Module, &ctx, name, SourceLoc(), { }),
-    Flags() {
+    TypeDecl(DeclKind::Module, &ctx, name, SourceLoc(), { }) {
+
   ctx.addDestructorCleanup(*this);
   setImplicit();
   setInterfaceType(ModuleType::get(this));
@@ -545,6 +545,20 @@ void ModuleDecl::getTopLevelDecls(SmallVectorImpl<Decl*> &Results) const {
 
 void SourceFile::getTopLevelDecls(SmallVectorImpl<Decl*> &Results) const {
   Results.append(Decls.begin(), Decls.end());
+}
+
+void ModuleDecl::getPrecedenceGroups(
+       SmallVectorImpl<PrecedenceGroupDecl*> &Results) const {
+  FORWARD(getPrecedenceGroups, (Results));
+}
+
+void SourceFile::getPrecedenceGroups(
+       SmallVectorImpl<PrecedenceGroupDecl*> &Results) const {
+  for (auto pair : PrecedenceGroups) {
+    if (pair.second.getPointer() && pair.second.getInt()) {
+      Results.push_back(pair.second.getPointer());
+    }
+  }
 }
 
 void SourceFile::getLocalTypeDecls(SmallVectorImpl<TypeDecl*> &Results) const {

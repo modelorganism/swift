@@ -1346,13 +1346,17 @@ END_CAN_TYPE_WRAPPER(BuiltinVectorType, BuiltinType)
 class BuiltinIntegerWidth {
   /// Tag values for abstract integer sizes.
   enum : unsigned {
-    Least_SpecialValue = ~2U,
-    /// The size of a pointer on the target system.
-    PointerWidth = ~0U,
-    
     /// Inhabitants stolen for use as DenseMap special values.
-    DenseMapEmpty = ~1U,
-    DenseMapTombstone = ~2U,
+    DenseMapEmpty = ~0U,
+    DenseMapTombstone = ~1U,
+
+    /// An arbitrary-precision integer.
+    ArbitraryWidth = ~2U,
+
+    /// The size of a pointer on the target system.
+    PointerWidth = ~3U,
+    
+    Least_SpecialValue = ~3U,
   };
   
   unsigned RawValue;
@@ -1372,6 +1376,10 @@ public:
   static BuiltinIntegerWidth pointer() {
     return BuiltinIntegerWidth(PointerWidth);
   }
+
+  static BuiltinIntegerWidth arbitrary() {
+    return BuiltinIntegerWidth(ArbitraryWidth);
+  }
   
   /// Is this a fixed width?
   bool isFixedWidth() const { return RawValue < Least_SpecialValue; }
@@ -1384,6 +1392,9 @@ public:
   
   /// Is this the abstract target pointer width?
   bool isPointerWidth() const { return RawValue == PointerWidth; }
+
+  /// Is this the abstract arbitrary-width value?
+  bool isArbitraryWidth() const { return RawValue == ArbitraryWidth; }
   
   /// Get the least supported value for the width.
   ///
@@ -1393,6 +1404,8 @@ public:
       return getFixedWidth();
     if (isPointerWidth())
       return 32;
+    if (isArbitraryWidth())
+      return 1;
     llvm_unreachable("impossible width value");
   }
   
@@ -1404,8 +1417,16 @@ public:
       return getFixedWidth();
     if (isPointerWidth())
       return 64;
+    if (isArbitraryWidth())
+      return ~0U;
     llvm_unreachable("impossible width value");
   }
+
+  /// Parse a value of this bit-width.
+  ///
+  /// If the radix is 0, it is autosensed.
+  APInt parse(StringRef text, unsigned radix, bool negate,
+              bool *hadError = nullptr) const;
   
   friend bool operator==(BuiltinIntegerWidth a, BuiltinIntegerWidth b) {
     return a.RawValue == b.RawValue;
@@ -1415,15 +1436,31 @@ public:
   }
 };
 
+/// An abstract base class for the two integer types.
+class AnyBuiltinIntegerType : public BuiltinType {
+protected:
+  AnyBuiltinIntegerType(TypeKind kind, const ASTContext &C)
+    : BuiltinType(kind, C) {}
+
+public:
+  static bool classof(const TypeBase *T) {
+    return T->getKind() >= TypeKind::First_AnyBuiltinIntegerType &&
+           T->getKind() <= TypeKind::Last_AnyBuiltinIntegerType;
+  }
+
+  BuiltinIntegerWidth getWidth() const; // defined inline below
+};
+DEFINE_EMPTY_CAN_TYPE_WRAPPER(AnyBuiltinIntegerType, BuiltinType)
+
 /// The builtin integer types.  These directly correspond
 /// to LLVM IR integer types.  They lack signedness and have an arbitrary
 /// bitwidth.
-class BuiltinIntegerType : public BuiltinType {
+class BuiltinIntegerType : public AnyBuiltinIntegerType {
   friend class ASTContext;
 private:
   BuiltinIntegerWidth Width;
   BuiltinIntegerType(BuiltinIntegerWidth BitWidth, const ASTContext &C)
-    : BuiltinType(TypeKind::BuiltinInteger, C), Width(BitWidth) {}
+    : AnyBuiltinIntegerType(TypeKind::BuiltinInteger, C), Width(BitWidth) {}
   
 public:
   /// Get a builtin integer type.
@@ -1440,7 +1477,8 @@ public:
     return get(BuiltinIntegerWidth::pointer(), C);
   }
   
-  /// Return the bit width of the integer.
+  /// Return the bit width of the integer.  Always returns a non-arbitrary
+  /// width.
   BuiltinIntegerWidth getWidth() const {
     return Width;
   }
@@ -1478,8 +1516,31 @@ public:
     return T->getKind() == TypeKind::BuiltinInteger;
   }
 };
-DEFINE_EMPTY_CAN_TYPE_WRAPPER(BuiltinIntegerType, BuiltinType)
-  
+DEFINE_EMPTY_CAN_TYPE_WRAPPER(BuiltinIntegerType, AnyBuiltinIntegerType)
+
+/// BuiltinIntegerLiteralType - The builtin arbitrary-precision integer type.
+/// Useful for constructing integer literals.
+class BuiltinIntegerLiteralType : public AnyBuiltinIntegerType {
+  friend class ASTContext;
+  BuiltinIntegerLiteralType(const ASTContext &C)
+    : AnyBuiltinIntegerType(TypeKind::BuiltinIntegerLiteral, C) {}
+public:
+  static bool classof(const TypeBase *T) {
+    return T->getKind() == TypeKind::BuiltinIntegerLiteral;
+  }
+
+  BuiltinIntegerWidth getWidth() const = delete;
+};
+DEFINE_EMPTY_CAN_TYPE_WRAPPER(BuiltinIntegerLiteralType, AnyBuiltinIntegerType);
+
+inline BuiltinIntegerWidth AnyBuiltinIntegerType::getWidth() const {
+  if (auto intTy = dyn_cast<BuiltinIntegerType>(this)) {
+    return intTy->getWidth();
+  } else {
+    return BuiltinIntegerWidth::arbitrary();
+  }
+}
+
 class BuiltinFloatType : public BuiltinType {
   friend class ASTContext;
 public:
@@ -1658,9 +1719,8 @@ class ParameterTypeFlags {
     Variadic    = 1 << 0,
     AutoClosure = 1 << 1,
     Escaping    = 1 << 2,
-    InOut       = 1 << 3,
-    Shared      = 1 << 4,
-    Owned       = 1 << 5,
+    OwnershipShift = 3,
+    Ownership   = 7 << OwnershipShift,
 
     NumBits = 6
   };
@@ -1679,9 +1739,7 @@ public:
                      ValueOwnership ownership)
       : value((variadic ? Variadic : 0) | (autoclosure ? AutoClosure : 0) |
               (escaping ? Escaping : 0) |
-              (ownership == ValueOwnership::InOut ? InOut : 0) |
-              (ownership == ValueOwnership::Shared ? Shared : 0) |
-              (ownership == ValueOwnership::Owned ? Owned : 0)) {}
+              uint8_t(ownership) << OwnershipShift) {}
 
   /// Create one from what's present in the parameter type
   inline static ParameterTypeFlags
@@ -1691,19 +1749,12 @@ public:
   bool isVariadic() const { return value.contains(Variadic); }
   bool isAutoClosure() const { return value.contains(AutoClosure); }
   bool isEscaping() const { return value.contains(Escaping); }
-  bool isInOut() const { return value.contains(InOut); }
-  bool isShared() const { return value.contains(Shared); }
-  bool isOwned() const { return value.contains(Owned); }
+  bool isInOut() const { return getValueOwnership() == ValueOwnership::InOut; }
+  bool isShared() const { return getValueOwnership() == ValueOwnership::Shared;}
+  bool isOwned() const { return getValueOwnership() == ValueOwnership::Owned; }
 
   ValueOwnership getValueOwnership() const {
-    if (isInOut())
-      return ValueOwnership::InOut;
-    else if (isShared())
-      return ValueOwnership::Shared;
-    else if (isOwned())
-      return ValueOwnership::Owned;
-
-    return ValueOwnership::Default;
+    return ValueOwnership((value.toRaw() & Ownership) >> OwnershipShift);
   }
 
   ParameterTypeFlags withVariadic(bool variadic) const {
@@ -1717,18 +1768,29 @@ public:
   }
 
   ParameterTypeFlags withInOut(bool isInout) const {
-    return ParameterTypeFlags(isInout ? value | ParameterTypeFlags::InOut
-                                      : value - ParameterTypeFlags::InOut);
+    return withValueOwnership(isInout ? ValueOwnership::InOut
+                                      : ValueOwnership::Default);
   }
   
   ParameterTypeFlags withShared(bool isShared) const {
-    return ParameterTypeFlags(isShared ? value | ParameterTypeFlags::Shared
-                                       : value - ParameterTypeFlags::Shared);
+    return withValueOwnership(isShared ? ValueOwnership::Shared
+                                       : ValueOwnership::Default);
   }
 
   ParameterTypeFlags withOwned(bool isOwned) const {
-    return ParameterTypeFlags(isOwned ? value | ParameterTypeFlags::Owned
-                                      : value - ParameterTypeFlags::Owned);
+    return withValueOwnership(isOwned ? ValueOwnership::Owned
+                                      : ValueOwnership::Default);
+  }
+
+  ParameterTypeFlags withValueOwnership(ValueOwnership ownership) const {
+    return (value - ParameterTypeFlags::Ownership)
+            | ParameterFlags(uint8_t(ownership) << OwnershipShift);
+  }
+
+  ParameterTypeFlags withAutoClosure(bool isAutoClosure) const {
+    return ParameterTypeFlags(isAutoClosure
+                                  ? value | ParameterTypeFlags::AutoClosure
+                                  : value - ParameterTypeFlags::AutoClosure);
   }
 
   bool operator ==(const ParameterTypeFlags &other) const {
@@ -1745,9 +1807,8 @@ public:
 class YieldTypeFlags {
   enum YieldFlags : uint8_t {
     None        = 0,
-    InOut       = 1 << 1,
-    Shared      = 1 << 2,
-    Owned       = 1 << 3,
+    Ownership   = 7,
+    OwnershipShift = 0,
 
     NumBits = 3
   };
@@ -1764,35 +1825,34 @@ public:
   }
 
   YieldTypeFlags(ValueOwnership ownership)
-      : value((ownership == ValueOwnership::InOut ? InOut : 0) |
-              (ownership == ValueOwnership::Shared ? Shared : 0) |
-              (ownership == ValueOwnership::Owned ? Owned : 0)) {}
+      : value(uint8_t(ownership) << OwnershipShift) {}
 
-  bool isInOut() const { return value.contains(InOut); }
-  bool isShared() const { return value.contains(Shared); }
-  bool isOwned() const { return value.contains(Owned); }
+  bool isInOut() const { return getValueOwnership() == ValueOwnership::InOut; }
+  bool isShared() const { return getValueOwnership() == ValueOwnership::Shared;}
+  bool isOwned() const { return getValueOwnership() == ValueOwnership::Owned; }
 
   ValueOwnership getValueOwnership() const {
-    if (isInOut())
-      return ValueOwnership::InOut;
-    else if (isShared())
-      return ValueOwnership::Shared;
-    else if (isOwned())
-      return ValueOwnership::Owned;
-
-    return ValueOwnership::Default;
+    return ValueOwnership((value.toRaw() & Ownership) >> OwnershipShift);
   }
 
   YieldTypeFlags withInOut(bool isInout) const {
-    return YieldTypeFlags(isInout ? value | InOut : value - InOut);
+    return withValueOwnership(isInout ? ValueOwnership::InOut
+                                      : ValueOwnership::Default);
   }
   
   YieldTypeFlags withShared(bool isShared) const {
-    return YieldTypeFlags(isShared ? value | Shared : value - Shared);
+    return withValueOwnership(isShared ? ValueOwnership::Shared
+                                       : ValueOwnership::Default);
   }
 
   YieldTypeFlags withOwned(bool isOwned) const {
-    return YieldTypeFlags(isOwned ? value | Owned : value - Owned);
+    return withValueOwnership(isOwned ? ValueOwnership::Owned
+                                      : ValueOwnership::Default);
+  }
+
+  YieldTypeFlags withValueOwnership(ValueOwnership ownership) const {
+    return (value - YieldTypeFlags::Ownership)
+            | YieldFlags(uint8_t(ownership) << OwnershipShift);
   }
 
   /// Return these flags interpreted as parameter flags.
@@ -3078,7 +3138,7 @@ END_CAN_TYPE_WRAPPER(FunctionType, AnyFunctionType)
 /// it.
 SmallBitVector
 computeDefaultMap(ArrayRef<AnyFunctionType::Param> params,
-                  const ValueDecl *paramOwner, unsigned level);
+                  const ValueDecl *paramOwner, bool skipCurriedSelf);
 
 /// Turn a param list into a symbolic and printable representation that does not
 /// include the types, something like (: , b:, c:)
@@ -3634,23 +3694,6 @@ public:
       case Representation::Closure:
         return false;
       case Representation::ObjCMethod:
-      case Representation::Method:
-      case Representation::WitnessMethod:
-        return true;
-      }
-
-      llvm_unreachable("Unhandled Representation in switch.");
-    }
-
-    bool hasGuaranteedSelfParam() const {
-      switch (getRepresentation()) {
-      case Representation::Thick:
-      case Representation::Block:
-      case Representation::Thin:
-      case Representation::CFunctionPointer:
-      case Representation::ObjCMethod:
-      case Representation::Closure:
-        return false;
       case Representation::Method:
       case Representation::WitnessMethod:
         return true;
@@ -4650,7 +4693,7 @@ public:
   /// type shall conform.
   ArrayRef<ProtocolDecl *> getConformsTo() const {
     return { getTrailingObjects<ProtocolDecl *>(),
-             Bits.ArchetypeType.NumProtocols };
+             static_cast<size_t>(Bits.ArchetypeType.NumProtocols) };
   }
   
   /// requiresClass - True if the type can only be substituted with class types.

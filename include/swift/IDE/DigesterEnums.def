@@ -55,6 +55,8 @@
 #endif
 
 NODE_KIND(Root, Root)
+NODE_KIND(Conformance, Conformance)
+NODE_KIND(TypeWitness, TypeWitness)
 NODE_KIND(TypeNominal, TypeNominal)
 NODE_KIND(TypeFunc, TypeFunc)
 NODE_KIND(TypeAlias, TypeNameAlias)
@@ -67,6 +69,7 @@ NODE_KIND(DeclSetter, Setter)
 NODE_KIND(DeclSubscript, Subscript)
 NODE_KIND_RANGE(DeclAbstractFunc, DeclFunction, DeclSubscript)
 
+NODE_KIND(DeclOperator, OperatorDecl)
 NODE_KIND(DeclType, TypeDecl)
 NODE_KIND(DeclVar, Var)
 NODE_KIND(DeclTypeAlias, TypeAlias)
@@ -126,7 +129,10 @@ KEY_BOOL(HasDefaultArg, hasDefaultArg)
 KEY_BOOL(HasSetter, hasSetter)
 KEY_BOOL(IsLet, isLet)
 KEY_BOOL(IsOpen, isOpen)
+KEY_BOOL(IsInternal, isInternal)
 KEY_BOOL(HasStorage, hasStorage)
+KEY_BOOL(HasDidset, hasDidset)
+KEY_BOOL(HasWillset, hasWillset)
 
 KEY(kind)
 
@@ -138,14 +144,16 @@ KEY_STRING(ModuleName, moduleName)
 KEY_STRING(SuperclassUsr, superclassUsr)
 KEY_STRING(EnumRawTypeName, enumRawTypeName)
 KEY_STRING(GenericSig, genericSig)
+KEY_STRING(FuncSelfKind, funcSelfKind)
+KEY_STRING(ParamValueOwnership, paramValueOwnership)
 
 KEY_STRING_ARR(SuperclassNames, superclassNames)
-KEY_STRING_ARR(ConformingProtocols, conformingProtocols)
 
 KEY_UINT(SelfIndex, selfIndex)
 KEY_UINT(FixedBinaryOrder, fixedbinaryorder)
 
 KEY(children)
+KEY(conformances)
 KEY(typeAttributes)
 KEY(declAttributes)
 KEY(declKind)

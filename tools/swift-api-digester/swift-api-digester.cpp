@@ -100,6 +100,11 @@ static llvm::cl::opt<bool>
 Abi("abi", llvm::cl::desc("Dumping ABI interface"),  llvm::cl::init(false));
 
 static llvm::cl::opt<bool>
+SwiftOnly("swift-only",
+          llvm::cl::desc("Only include APIs defined from Swift source"),
+          llvm::cl::init(false));
+
+static llvm::cl::opt<bool>
 PrintModule("print-module", llvm::cl::desc("Print module names in diagnostics"));
 
 static llvm::cl::opt<ActionType>
@@ -506,15 +511,20 @@ class SameNameNodeMatcher : public NodeMatcher {
     PrintedNameAndUSR,
   };
 
+  static bool isUSRSame(SDKNode *L, SDKNode *R) {
+    auto *LD = dyn_cast<SDKNodeDecl>(L);
+    auto *RD = dyn_cast<SDKNodeDecl>(R);
+    if (!LD || !RD)
+      return false;
+    return LD->getUsr() == RD->getUsr();
+  }
+
   // Given two SDK nodes, figure out the reason for why they have the same name.
   Optional<NameMatchKind> getNameMatchKind(SDKNode *L, SDKNode *R) {
     if (L->getKind() != R->getKind())
       return None;
-    auto *LD = L->getAs<SDKNodeDecl>();
-    auto *RD = R->getAs<SDKNodeDecl>();
-    assert(LD && RD);
-    auto NameEqual = LD->getPrintedName() == RD->getPrintedName();
-    auto UsrEqual = LD->getUsr() == RD->getUsr();
+    auto NameEqual = L->getPrintedName() == R->getPrintedName();
+    auto UsrEqual = isUSRSame(L, R);
     if (NameEqual && UsrEqual)
       return NameMatchKind::PrintedNameAndUSR;
     else if (NameEqual)
@@ -667,30 +677,14 @@ void swift::ide::api::SDKNodeDeclType::diagnose(SDKNode *Right) {
   auto &Diags = Ctx.getDiags();
 
   if (getDeclKind() != R->getDeclKind()) {
-    Diags.diagnose(SourceLoc(), diag::nominal_type_kind_changed,
-      getScreenInfo(), getDeclKindStr(R->getDeclKind()));
+    Diags.diagnose(SourceLoc(), diag::decl_kind_changed, getScreenInfo(),
+                   getDeclKindStr(R->getDeclKind()));
     return;
   }
 
   assert(getDeclKind() == R->getDeclKind());
   auto DKind = getDeclKind();
-  std::vector<StringRef> LeftMinusRight;
-  std::vector<StringRef> RightMinusLeft;
-  swift::ide::api::stringSetDifference(getAllProtocols(), R->getAllProtocols(),
-                                       LeftMinusRight, RightMinusLeft);
-  bool isProtocol = getDeclKind() == DeclKind::Protocol;
-  std::for_each(LeftMinusRight.begin(), LeftMinusRight.end(), [&](StringRef Name) {
-    Diags.diagnose(SourceLoc(), diag::conformance_removed, getScreenInfo(), Name,
-                   isProtocol);
-  });
   switch (DKind) {
-  case DeclKind::Protocol: {
-    std::for_each(RightMinusLeft.begin(), RightMinusLeft.end(), [&](StringRef Name) {
-      Diags.diagnose(SourceLoc(), diag::conformance_added, getScreenInfo(),
-                     Name);
-    });
-    break;
-  }
   case DeclKind::Class: {
     auto LSuperClass = getSuperClassName();
     auto RSuperClass = R->getSuperClassName();
@@ -721,9 +715,23 @@ void swift::ide::api::SDKNodeDeclAbstractFunc::diagnose(SDKNode *Right) {
     Diags.diagnose(SourceLoc(), diag::decl_new_attr, getScreenInfo(),
                    Ctx.buffer("throwing"));
   }
-  if (!isMutating() && R->isMutating()) {
-    Diags.diagnose(SourceLoc(), diag::decl_new_attr, getScreenInfo(),
-                   Ctx.buffer("mutating"));
+}
+
+void swift::ide::api::SDKNodeDeclFunction::diagnose(SDKNode *Right) {
+  SDKNodeDeclAbstractFunc::diagnose(Right);
+  auto *R = dyn_cast<SDKNodeDeclFunction>(Right);
+  if (!R)
+    return;
+  auto &Diags = Ctx.getDiags();
+  if (getSelfAccessKind() != R->getSelfAccessKind()) {
+    Diags.diagnose(SourceLoc(), diag::func_self_access_change, getScreenInfo(),
+                   getSelfAccessKind(), R->getSelfAccessKind());
+  }
+  if (Ctx.checkingABI()) {
+    if (hasFixedBinaryOrder() != R->hasFixedBinaryOrder()) {
+      Ctx.getDiags().diagnose(SourceLoc(), diag::func_has_fixed_order_change,
+                              getScreenInfo(), hasFixedBinaryOrder());
+    }
   }
 }
 
@@ -784,17 +792,36 @@ void swift::ide::api::SDKNodeDecl::diagnose(SDKNode *Right) {
     }
   }
 
-  if (Ctx.checkingABI()) {
-    // Check if some attributes with ABI-impact have been added/removed.
-    for (auto &Info: Ctx.getABIAttributeInfo()) {
-      if (hasDeclAttribute(Info.Kind) != RD->hasDeclAttribute(Info.Kind)) {
-        auto Desc = hasDeclAttribute(Info.Kind) ?
-        Ctx.buffer((llvm::Twine("without ") + Info.Content).str()):
-        Ctx.buffer((llvm::Twine("with ") + Info.Content).str());
-        Diags.diagnose(SourceLoc(), diag::decl_new_attr, getScreenInfo(),
-                       Desc);
-      }
+  // Check if some attributes with ABI/API-impact have been added/removed.
+  for (auto &Info: Ctx.getBreakingAttributeInfo()) {
+    if (hasDeclAttribute(Info.Kind) != RD->hasDeclAttribute(Info.Kind)) {
+      auto Desc = hasDeclAttribute(Info.Kind) ?
+      Ctx.buffer((llvm::Twine("without ") + Info.Content).str()):
+      Ctx.buffer((llvm::Twine("with ") + Info.Content).str());
+      Diags.diagnose(SourceLoc(), diag::decl_new_attr, getScreenInfo(),
+                     Desc);
     }
+  }
+
+  if (Ctx.checkingABI()) {
+    if (hasFixedBinaryOrder() && RD->hasFixedBinaryOrder() &&
+        getFixedBinaryOrder() != RD->getFixedBinaryOrder()) {
+      Ctx.getDiags().diagnose(SourceLoc(), diag::decl_reorder,
+                              getScreenInfo(),
+                              getFixedBinaryOrder(),
+                              RD->getFixedBinaryOrder());
+    }
+  }
+}
+
+void swift::ide::api::SDKNodeDeclOperator::diagnose(SDKNode *Right) {
+  SDKNodeDecl::diagnose(Right);
+  auto *RO = dyn_cast<SDKNodeDeclOperator>(Right);
+  if (!RO)
+    return;
+  if (getDeclKind() != RO->getDeclKind()) {
+    Ctx.getDiags().diagnose(SourceLoc(), diag::decl_kind_changed, getScreenInfo(),
+                            getDeclKindStr(RO->getDeclKind()));
   }
 }
 
@@ -808,12 +835,9 @@ void swift::ide::api::SDKNodeDeclVar::diagnose(SDKNode *Right) {
                             getScreenInfo());
   }
   if (Ctx.checkingABI()) {
-    if (hasFixedBinaryOrder() && RV->hasFixedBinaryOrder() &&
-        getFixedBinaryOrder() != RV->getFixedBinaryOrder()) {
-      Ctx.getDiags().diagnose(SourceLoc(), diag::decl_reorder,
-                              getScreenInfo(),
-                              getFixedBinaryOrder(),
-                              RV->getFixedBinaryOrder());
+    if (hasFixedBinaryOrder() != RV->hasFixedBinaryOrder()) {
+      Ctx.getDiags().diagnose(SourceLoc(), diag::var_has_fixed_order_change,
+                              getScreenInfo(), hasFixedBinaryOrder());
     }
     if (isLet() != RV->isLet()) {
       Ctx.getDiags().diagnose(SourceLoc(), diag::var_let_changed,
@@ -824,8 +848,7 @@ void swift::ide::api::SDKNodeDeclVar::diagnose(SDKNode *Right) {
 }
 
 static bool shouldDiagnoseType(SDKNodeType *T) {
-  return T->isTopLevelType() &&
-    !cast<SDKNodeDecl>(T->getParent())->isSDKPrivate();
+  return T->isTopLevelType();
 }
 
 void swift::ide::api::SDKNodeType::diagnose(SDKNode *Right) {
@@ -835,7 +858,21 @@ void swift::ide::api::SDKNodeType::diagnose(SDKNode *Right) {
   if (!RT || !shouldDiagnoseType(this))
     return;
   assert(isTopLevelType());
+
+  // Diagnose type witness changes when diagnosing ABI breakages.
+  if (auto *Wit = dyn_cast<SDKNodeTypeWitness>(getParent())) {
+    auto *Conform = Wit->getParent()->getAs<SDKNodeConformance>();
+    if (Ctx.checkingABI() && getPrintedName() != RT->getPrintedName()) {
+      Diags.diagnose(SourceLoc(), diag::type_witness_change,
+                     Conform->getNominalTypeDecl()->getScreenInfo(),
+                     Wit->getWitnessedTypeName(),
+                     getPrintedName(), RT->getPrintedName());
+    }
+    return;
+  }
+
   StringRef Descriptor = getTypeRoleDescription();
+  assert(isa<SDKNodeDecl>(getParent()));
   auto LParent = cast<SDKNodeDecl>(getParent());
   assert(LParent->getKind() == RT->getParent()->getAs<SDKNodeDecl>()->getKind());
 
@@ -847,6 +884,13 @@ void swift::ide::api::SDKNodeType::diagnose(SDKNode *Right) {
   if (hasDefaultArgument() && !RT->hasDefaultArgument()) {
     Diags.diagnose(SourceLoc(), diag::default_arg_removed,
                    LParent->getScreenInfo(), Descriptor);
+  }
+  if (getParamValueOwnership() != RT->getParamValueOwnership()) {
+    Diags.diagnose(SourceLoc(), diag::param_ownership_change,
+                   getParent()->getAs<SDKNodeDecl>()->getScreenInfo(),
+                   getTypeRoleDescription(),
+                   getParamValueOwnership(),
+                   RT->getParamValueOwnership());
   }
 }
 
@@ -869,23 +913,18 @@ namespace {
 // This is first pass on two given SDKNode trees. This pass removes the common part
 // of two versions of SDK, leaving only the changed part.
 class PrunePass : public MatchedNodeListener, public SDKTreeDiffPass {
-  static void removeCommonChildren(NodePtr Left, NodePtr Right) {
-    llvm::SmallPtrSet<NodePtr, 16> LeftToRemove;
-    llvm::SmallPtrSet<NodePtr, 16> RightToRemove;
-    for (auto LC : Left->getChildren()) {
-      for (auto RC : Right->getChildren()) {
-        if (*LC == *RC) {
-          LeftToRemove.insert(LC);
-          RightToRemove.insert(RC);
-          break;
-        }
-      }
-    }
-    for (NodePtr L : LeftToRemove)
-      Left->removeChild(L);
-    for (NodePtr R : RightToRemove)
-      Right->removeChild(R);
+
+  static void removeCommon(NodeVector &Left, NodeVector &Right) {
+    NodeVector LeftMinusRight, RightMinusLeft;
+    nodeSetDifference(Left, Right, LeftMinusRight, RightMinusLeft);
+    Left = LeftMinusRight;
+    Right = RightMinusLeft;
   }
+
+  static void removeCommonChildren(NodePtr Left, NodePtr Right) {
+    removeCommon(Left->getChildren(), Right->getChildren());
+  }
+
   SDKContext &Ctx;
   UpdatedNodesMap &UpdateMap;
 
@@ -929,10 +968,11 @@ public:
       assert(!Left);
       Right->annotate(NodeAnnotation::Added);
       if (Ctx.checkingABI()) {
-        if (auto *VAD = dyn_cast<SDKNodeDeclVar>(Right)) {
-          if (VAD->hasFixedBinaryOrder()) {
+        // Any order-important decl added to a non-resilient type breaks ABI.
+        if (auto *D = dyn_cast<SDKNodeDecl>(Right)) {
+          if (D->hasFixedBinaryOrder()) {
             Ctx.getDiags().diagnose(SourceLoc(), diag::decl_added,
-                                    VAD->getScreenInfo());
+                                    D->getScreenInfo());
           }
         }
       }
@@ -950,6 +990,16 @@ public:
                                     D->getScreenInfo());
         }
       }
+      // Diagnose an inherited protocol has been added.
+      if (auto *Conf = dyn_cast<SDKNodeConformance>(Right)) {
+        auto *TD = Conf->getNominalTypeDecl();
+        if (TD->isProtocol()) {
+          Ctx.getDiags().diagnose(SourceLoc(), diag::conformance_added,
+                                  TD->getScreenInfo(),
+                                  Conf->getName());
+        }
+      }
+
       return;
     case NodeMatchReason::Removed:
       assert(!Right);
@@ -960,6 +1010,13 @@ public:
                                   diag::default_associated_type_removed,
                                   AT->getScreenInfo(), LT->getPrintedName());
         }
+      }
+      // Diagnose a protocol conformance has been removed.
+      if (auto *Conf = dyn_cast<SDKNodeConformance>(Left)) {
+        auto *TD = Conf->getNominalTypeDecl();
+        Ctx.getDiags().diagnose(SourceLoc(), diag::conformance_removed,
+                                TD->getScreenInfo(), Conf->getName(),
+                                TD->isProtocol());
       }
       return;
     case NodeMatchReason::FuncToProperty:
@@ -989,8 +1046,16 @@ public:
     SDKNodeKind Kind = Left->getKind();
     assert(Kind == SDKNodeKind::Root || *Left != *Right);
     switch(Kind) {
-    case SDKNodeKind::Root:
     case SDKNodeKind::DeclType: {
+      // Remove common conformances and diagnose conformance changes.
+      auto LConf = cast<SDKNodeDeclType>(Left)->getConformances();
+      auto RConf = cast<SDKNodeDeclType>(Right)->getConformances();
+      removeCommon(LConf, RConf);
+      SameNameNodeMatcher(LConf, RConf, *this).match();
+      LLVM_FALLTHROUGH;
+    }
+    case SDKNodeKind::Conformance:
+    case SDKNodeKind::Root: {
       // If the matched nodes are both modules, remove the contained
       // type decls that are identical. If the matched nodes are both type decls,
       // remove the contained function decls that are identical.
@@ -999,7 +1064,8 @@ public:
       SNMatcher.match();
       break;
     }
-
+    case SDKNodeKind::TypeWitness:
+    case SDKNodeKind::DeclOperator:
     case SDKNodeKind::DeclSubscript:
     case SDKNodeKind::DeclAssociatedType:
     case SDKNodeKind::DeclFunction:
@@ -1249,7 +1315,7 @@ class InterfaceTypeChangeDetector {
     if (IsVisitingLeft &&
         Node->getPrintedName() != Counter->getPrintedName() &&
         (Node->getName() != Counter->getName() ||
-        Node->getChildrenCount() != Counter->getChildrenCount())) {
+         Node->getChildrenCount() != Counter->getChildrenCount())) {
       Node->annotate(NodeAnnotation::TypeRewritten);
       Node->annotate(NodeAnnotation::TypeRewrittenLeft, Node->getPrintedName());
       Node->annotate(NodeAnnotation::TypeRewrittenRight, 
@@ -1847,8 +1913,6 @@ void DiagnosisEmitter::handle(const SDKNodeDecl *Node, NodeAnnotation Anno) {
 }
 
 void DiagnosisEmitter::visitDecl(SDKNodeDecl *Node) {
-  if (Node->isSDKPrivate())
-    return;
   std::vector<NodeAnnotation> Scratch;
   for (auto Anno : Node->getAnnotations(Scratch))
     handle(Node, Anno);
@@ -1897,6 +1961,8 @@ class RenameDetectorForMemberDiff : public MatchedNodeListener {
 public:
   RenameDetectorForMemberDiff(): LeftDetector(true), RightDetector(false) {}
   void foundMatch(NodePtr Left, NodePtr Right, NodeMatchReason Reason) override {
+    if (!Left || !Right)
+      return;
     detectRename(Left, Right);
     LeftDetector.detect(Left, Right);
     RightDetector.detect(Right, Left);
@@ -1960,6 +2026,7 @@ static void findTypeMemberDiffs(NodePtr leftSDKRoot, NodePtr rightSDKRoot,
 }
 
 static int diagnoseModuleChange(StringRef LeftPath, StringRef RightPath,
+                                StringRef OutputPath,
                                 CheckerOptions Opts) {
   if (!fs::exists(LeftPath)) {
     llvm::errs() << LeftPath << " does not exist\n";
@@ -1969,7 +2036,14 @@ static int diagnoseModuleChange(StringRef LeftPath, StringRef RightPath,
     llvm::errs() << RightPath << " does not exist\n";
     return 1;
   }
-  ModuleDifferDiagsConsumer PDC(true);
+  llvm::raw_ostream *OS = &llvm::errs();
+  std::unique_ptr<llvm::raw_ostream> FileOS;
+  if (!OutputPath.empty()) {
+    std::error_code EC;
+    FileOS.reset(new llvm::raw_fd_ostream(OutputPath, EC, llvm::sys::fs::F_None));
+    OS = FileOS.get();
+  }
+  ModuleDifferDiagsConsumer PDC(true, *OS);
   SDKContext Ctx(Opts);
   Ctx.getDiags().addConsumer(PDC);
 
@@ -2247,6 +2321,7 @@ static CheckerOptions getCheckOpts() {
   Opts.AbortOnModuleLoadFailure = options::AbortOnModuleLoadFailure;
   Opts.LocationFilter = options::LocationFilter;
   Opts.PrintModule = options::PrintModule;
+  Opts.SwiftOnly = options::SwiftOnly;
   return Opts;
 }
 
@@ -2256,9 +2331,6 @@ int main(int argc, char *argv[]) {
 
   llvm::cl::ParseCommandLineOptions(argc, argv, "Swift SDK Digester\n");
   CompilerInvocation InitInvok;
-
-  ClangImporterOptions &ImporterOpts = InitInvok.getClangImporterOptions();
-  ImporterOpts.DetailedPreprocessingRecord = true;
 
   llvm::StringSet<> Modules;
   std::vector<std::string> PrintApis;
@@ -2286,7 +2358,8 @@ int main(int argc, char *argv[]) {
                          options::OutputFile, IgnoredUsrs, Opts);
     else
       return diagnoseModuleChange(options::SDKJsonPaths[0],
-                                  options::SDKJsonPaths[1], Opts);
+                                  options::SDKJsonPaths[1],
+                                  options::OutputFile, Opts);
   case ActionType::DeserializeSDK:
   case ActionType::DeserializeDiffItems: {
     if (options::SDKJsonPaths.size() != 1) {

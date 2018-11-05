@@ -261,7 +261,7 @@ SILGenFunction::emitFormalEvaluationManagedBorrowedRValueWithCleanup(
     return ManagedValue(borrowed, CleanupHandle::invalid());
   }
 
-  assert(InFormalEvaluationScope && "Must be in formal evaluation scope");
+  assert(isInFormalEvaluationScope() && "Must be in formal evaluation scope");
   auto &cleanup = Cleanups.pushCleanup<FormalEvaluationEndBorrowCleanup>();
   CleanupHandle handle = Cleanups.getTopCleanup();
   FormalEvalContext.push<SharedBorrowFormalAccess>(loc, handle, original,
@@ -2046,9 +2046,8 @@ ManagedValue SILGenFunction::getManagedValue(SILLocation loc,
     if (value.getOwnershipKind() == ValueOwnershipKind::Trivial)
       return ManagedValue::forUnmanaged(value.getValue());
 
-    // Otherwise, retain and enter a release cleanup.
-    valueTL.emitCopyValue(B, loc, value.getValue());
-    return emitManagedRValueWithCleanup(value.getValue(), valueTL);
+    // Otherwise, copy the value and return.
+    return value.getFinalManagedValue().copy(*this, loc);
   }
 
   // Otherwise, produce a temporary and copy into that.
@@ -3346,9 +3345,11 @@ getOrCreateKeyPathEqualsAndHash(SILGenModule &SGM,
         C.getBoolDecl()->getStoredProperties().front(), i1Ty);
       
       auto isTrueBB = subSGF.createBasicBlock();
-      
-      subSGF.B.createCondBranch(loc, isEqualI1, isTrueBB, isFalseBB);
-      
+      // Each false condition needs its own block to avoid critical edges.
+      auto falseEdgeBB = subSGF.createBasicBlockAndBranch(loc, isFalseBB);
+
+      subSGF.B.createCondBranch(loc, isEqualI1, isTrueBB, falseEdgeBB);
+
       subSGF.B.emitBlock(isTrueBB);
     }
     
@@ -4436,7 +4437,6 @@ RValue RValueEmitter::visitIfExpr(IfExpr *E, SGFContext C) {
     
     // FIXME: We could avoid imploding and reexploding tuples here.
     Condition cond = SGF.emitCondition(E->getCondExpr(),
-                                       /*hasFalse*/ true,
                                        /*invertCondition*/ false,
                                        SGF.getLoweredType(E->getType()),
                                        NumTrueTaken, NumFalseTaken);
@@ -4473,7 +4473,6 @@ RValue RValueEmitter::visitIfExpr(IfExpr *E, SGFContext C) {
                                                E, lowering.getLoweredType(), C);
     
     Condition cond = SGF.emitCondition(E->getCondExpr(),
-                                       /*hasFalse*/ true,
                                        /*invertCondition*/ false,
                                        /*contArgs*/ {},
                                        NumTrueTaken, NumFalseTaken);

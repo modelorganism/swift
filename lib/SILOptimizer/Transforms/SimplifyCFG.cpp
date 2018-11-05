@@ -205,7 +205,7 @@ static bool isUsedOutsideOfBlock(SILValue V, SILBasicBlock *BB) {
 }
 
 /// Helper function to perform SSA updates in case of jump threading.
-void swift::updateSSAAfterCloning(BaseThreadingCloner &Cloner,
+void swift::updateSSAAfterCloning(BasicBlockCloner &Cloner,
                                   SILBasicBlock *SrcBB, SILBasicBlock *DestBB) {
   SILSSAUpdater SSAUp;
   for (auto AvailValPair : Cloner.AvailVals) {
@@ -319,12 +319,11 @@ public:
                             << " to bb" << Dest->getDebugID() << '\n');
     auto *SrcTerm = cast<BranchInst>(Src->getTerminator());
 
-    EdgeThreadingCloner Cloner(SrcTerm);
-    for (auto &I : *Dest)
-      Cloner.process(&I);
+    BasicBlockCloner Cloner(SrcTerm->getDestBB());
+    Cloner.cloneBranchTarget(SrcTerm);
 
     // We have copied the threaded block into the edge.
-    Src = Cloner.getEdgeBB();
+    Src = Cloner.getNewBB();
 
     // Rewrite the cloned branch to eliminate the non-taken path.
     if (auto *CondTerm = dyn_cast<CondBranchInst>(Src->getTerminator())) {
@@ -1052,9 +1051,8 @@ bool SimplifyCFG::tryJumpThreading(BranchInst *BI) {
   // Okay, it looks like we want to do this and we can.  Duplicate the
   // destination block into this one, rewriting uses of the BBArgs to use the
   // branch arguments as we go.
-  EdgeThreadingCloner Cloner(BI);
-  for (auto &I : *DestBB)
-    Cloner.process(&I);
+  BasicBlockCloner Cloner(DestBB);
+  Cloner.cloneBranchTarget(BI);
 
   // Does not currently update DominanceInfo.
   Cloner.splitCriticalEdges(nullptr, nullptr);
@@ -1063,10 +1061,10 @@ bool SimplifyCFG::tryJumpThreading(BranchInst *BI) {
   // the threaded and edge block to the worklist now that they (likely) can be
   // simplified.
   addToWorklist(SrcBB);
-  addToWorklist(Cloner.getEdgeBB());
+  addToWorklist(Cloner.getNewBB());
 
   if (NeedToUpdateSSA)
-    updateSSAAfterCloning(Cloner, Cloner.getEdgeBB(), DestBB);
+    updateSSAAfterCloning(Cloner, Cloner.getNewBB(), DestBB);
 
   // We may be able to simplify DestBB now that it has one fewer predecessor.
   simplifyAfterDroppingPredecessor(DestBB);
@@ -2433,16 +2431,14 @@ bool SimplifyCFG::tailDuplicateObjCMethodCallSuccessorBlocks() {
     // Okay, it looks like we want to do this and we can.  Duplicate the
     // destination block into this one, rewriting uses of the BBArgs to use the
     // branch arguments as we go.
-    EdgeThreadingCloner Cloner(Branch);
-
-    for (auto &I : *DestBB)
-      Cloner.process(&I);
+    BasicBlockCloner Cloner(DestBB);
+    Cloner.cloneBranchTarget(Branch);
 
     // Does not currently update DominanceInfo.
     Cloner.splitCriticalEdges(nullptr, nullptr);
 
-    updateSSAAfterCloning(Cloner, Cloner.getEdgeBB(), DestBB);
-    addToWorklist(Cloner.getEdgeBB());
+    updateSSAAfterCloning(Cloner, Cloner.getNewBB(), DestBB);
+    addToWorklist(Cloner.getNewBB());
   }
 
   return Changed;
@@ -2864,7 +2860,7 @@ bool SimplifyCFG::run() {
 
   // Canonicalize switch_enum instructions.
   Changed |= canonicalizeSwitchEnums();
-  
+
   return Changed;
 }
 

@@ -267,11 +267,9 @@ public protocol CustomDebugStringConvertible {
 // Default (ad-hoc) printing
 //===----------------------------------------------------------------------===//
 
-@usableFromInline // FIXME(sil-serialize-all)
 @_silgen_name("swift_EnumCaseName")
 internal func _getEnumCaseName<T>(_ value: T) -> UnsafePointer<CChar>?
 
-@usableFromInline // FIXME(sil-serialize-all)
 @_silgen_name("swift_OpaqueSummary")
 internal func _opaqueSummary(_ metadata: Any.Type) -> UnsafePointer<CChar>?
 
@@ -545,12 +543,12 @@ internal struct _Stdout : TextOutputStream {
     if _fastPath(string._guts.isASCII) {
       defer { _fixLifetime(string) }
       let ascii = string._guts._unmanagedASCIIView
-      _stdlib_fwrite_stdout(ascii.start, ascii.count, 1)
+      _swift_stdlib_fwrite_stdout(ascii.start, ascii.count, 1)
       return
     }
 
     for c in string.utf8 {
-      _stdlib_putchar_unlocked(Int32(c))
+      _swift_stdlib_putchar_unlocked(Int32(c))
     }
   }
 }
@@ -559,7 +557,6 @@ extension String : TextOutputStream {
   /// Appends the given string to this string.
   /// 
   /// - Parameter other: A string to append.
-  @inlinable // FIXME(sil-serialize-all)
   public mutating func write(_ other: String) {
     self += other
   }
@@ -573,7 +570,6 @@ extension String : TextOutputStreamable {
   /// Writes the string into the given output stream.
   /// 
   /// - Parameter target: An output stream.
-  @inlinable // FIXME(sil-serialize-all)
   public func write<Target : TextOutputStream>(to target: inout Target) {
     target.write(self)
   }
@@ -583,7 +579,6 @@ extension Character : TextOutputStreamable {
   /// Writes the character into the given output stream.
   ///
   /// - Parameter target: An output stream.
-  @inlinable // FIXME(sil-serialize-all)
   public func write<Target : TextOutputStream>(to target: inout Target) {
     target.write(String(self))
   }
@@ -594,7 +589,6 @@ extension Unicode.Scalar : TextOutputStreamable {
   /// output stream.
   ///
   /// - Parameter target: An output stream.
-  @inlinable // FIXME(sil-serialize-all)
   public func write<Target : TextOutputStream>(to target: inout Target) {
     target.write(String(Character(self)))
   }

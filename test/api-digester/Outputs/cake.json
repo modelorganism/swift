@@ -36,7 +36,8 @@
           "usr": "s:4cake2P1PAAE1poiyAaB_pAaB_p_AaB_ptFZ",
           "moduleName": "cake",
           "genericSig": "<Self where Self : P1>",
-          "static": true
+          "static": true,
+          "funcSelfKind": "NonMutating"
         }
       ],
       "declKind": "Protocol",
@@ -50,6 +51,27 @@
       "declKind": "Protocol",
       "usr": "s:4cake2P2P",
       "moduleName": "cake"
+    },
+    {
+      "kind": "TypeDecl",
+      "name": "P3",
+      "printedName": "P3",
+      "declKind": "Protocol",
+      "usr": "s:4cake2P3P",
+      "moduleName": "cake",
+      "genericSig": "<Self : P1, Self : P2>",
+      "conformances": [
+        {
+          "kind": "Conformance",
+          "name": "P2",
+          "printedName": "P2"
+        },
+        {
+          "kind": "Conformance",
+          "name": "P1",
+          "printedName": "P1"
+        }
+      ]
     },
     {
       "kind": "TypeDecl",
@@ -70,7 +92,8 @@
           "declKind": "Func",
           "usr": "s:4cake2S1V4foo1yyFZ",
           "moduleName": "cake",
-          "static": true
+          "static": true,
+          "funcSelfKind": "NonMutating"
         },
         {
           "kind": "Function",
@@ -86,7 +109,7 @@
           "declKind": "Func",
           "usr": "s:4cake2S1V4foo2yyF",
           "moduleName": "cake",
-          "mutating": true
+          "funcSelfKind": "Mutating"
         },
         {
           "kind": "Function",
@@ -108,24 +131,8 @@
           ],
           "declKind": "Func",
           "usr": "s:4cake2S1V4foo6yyF",
-          "moduleName": "cake"
-        },
-        {
-          "kind": "Constructor",
-          "name": "init",
-          "printedName": "init()",
-          "children": [
-            {
-              "kind": "TypeNominal",
-              "name": "S1",
-              "printedName": "S1",
-              "usr": "s:4cake2S1V"
-            }
-          ],
-          "declKind": "Constructor",
-          "usr": "s:4cake2S1VACycfc",
           "moduleName": "cake",
-          "implicit": true
+          "funcSelfKind": "NonMutating"
         }
       ],
       "declKind": "Struct",
@@ -134,9 +141,17 @@
       "declAttributes": [
         "FixedLayout"
       ],
-      "conformingProtocols": [
-        "P1",
-        "P2"
+      "conformances": [
+        {
+          "kind": "Conformance",
+          "name": "P1",
+          "printedName": "P1"
+        },
+        {
+          "kind": "Conformance",
+          "name": "P2",
+          "printedName": "P2"
+        }
       ]
     },
     {
@@ -144,41 +159,6 @@
       "name": "C0",
       "printedName": "C0",
       "children": [
-        {
-          "kind": "Constructor",
-          "name": "init",
-          "printedName": "init()",
-          "children": [
-            {
-              "kind": "TypeNominal",
-              "name": "C0",
-              "printedName": "C0<T1, T2, T3>",
-              "children": [
-                {
-                  "kind": "TypeNominal",
-                  "name": "GenericTypeParam",
-                  "printedName": "T1"
-                },
-                {
-                  "kind": "TypeNominal",
-                  "name": "GenericTypeParam",
-                  "printedName": "T2"
-                },
-                {
-                  "kind": "TypeNominal",
-                  "name": "GenericTypeParam",
-                  "printedName": "T3"
-                }
-              ],
-              "usr": "s:4cake2C0C"
-            }
-          ],
-          "declKind": "Constructor",
-          "usr": "s:4cake2C0CACyxq_q0_Gycfc",
-          "moduleName": "cake",
-          "genericSig": "<T1, T2, T3>",
-          "implicit": true
-        },
         {
           "kind": "Function",
           "name": "conditionalFooExt",
@@ -193,7 +173,8 @@
           "declKind": "Func",
           "usr": "s:4cake2C0CA2A2S1VRszAERs_AERs0_rlE17conditionalFooExtyyF",
           "moduleName": "cake",
-          "genericSig": "<T1, T2, T3 where T1 == S1, T2 == S1, T3 == S1>"
+          "genericSig": "<T1, T2, T3 where T1 == S1, T2 == S1, T3 == S1>",
+          "funcSelfKind": "NonMutating"
         },
         {
           "kind": "Function",
@@ -209,7 +190,8 @@
           "declKind": "Func",
           "usr": "s:4cake2C0C19unconditionalFooExtyyF",
           "moduleName": "cake",
-          "genericSig": "<T1, T2, T3>"
+          "genericSig": "<T1, T2, T3>",
+          "funcSelfKind": "NonMutating"
         }
       ],
       "declKind": "Class",
@@ -273,7 +255,8 @@
           "usr": "s:4cake2C1C4foo1yyFZ",
           "moduleName": "cake",
           "static": true,
-          "isOpen": true
+          "isOpen": true,
+          "funcSelfKind": "NonMutating"
         },
         {
           "kind": "Var",
@@ -422,24 +405,6 @@
           ],
           "ownership": 2,
           "hasStorage": true
-        },
-        {
-          "kind": "Constructor",
-          "name": "init",
-          "printedName": "init()",
-          "children": [
-            {
-              "kind": "TypeNominal",
-              "name": "C1",
-              "printedName": "C1",
-              "usr": "s:4cake2C1C"
-            }
-          ],
-          "declKind": "Constructor",
-          "usr": "s:4cake2C1CACycfc",
-          "moduleName": "cake",
-          "overriding": true,
-          "implicit": true
         }
       ],
       "declKind": "Class",
@@ -476,7 +441,8 @@
       ],
       "declKind": "Func",
       "usr": "s:4cake4foo1_1bySi_AA2S1VtF",
-      "moduleName": "cake"
+      "moduleName": "cake",
+      "funcSelfKind": "NonMutating"
     },
     {
       "kind": "Function",
@@ -504,7 +470,8 @@
       ],
       "declKind": "Func",
       "usr": "s:4cake4foo2_1bySi_AA2S1VtF",
-      "moduleName": "cake"
+      "moduleName": "cake",
+      "funcSelfKind": "NonMutating"
     },
     {
       "kind": "TypeDecl",
@@ -552,8 +519,7 @@
           ],
           "declKind": "EnumElement",
           "usr": "s:4cake6NumberO3oneyA2CmF",
-          "moduleName": "cake",
-          "fixedbinaryorder": 0
+          "moduleName": "cake"
         },
         {
           "kind": "TypeAlias",
@@ -620,13 +586,15 @@
               "kind": "TypeNominal",
               "name": "Hasher",
               "printedName": "Hasher",
+              "paramValueOwnership": "InOut",
               "usr": "s:s6HasherV"
             }
           ],
           "declKind": "Func",
           "usr": "s:4cake6NumberO4hash4intoys6HasherVz_tF",
           "moduleName": "cake",
-          "implicit": true
+          "implicit": true,
+          "funcSelfKind": "NonMutating"
         },
         {
           "kind": "Constructor",
@@ -704,10 +672,37 @@
       "usr": "s:4cake6NumberO",
       "moduleName": "cake",
       "enumRawTypeName": "Int",
-      "conformingProtocols": [
-        "Equatable",
-        "Hashable",
-        "RawRepresentable"
+      "conformances": [
+        {
+          "kind": "Conformance",
+          "name": "Equatable",
+          "printedName": "Equatable"
+        },
+        {
+          "kind": "Conformance",
+          "name": "Hashable",
+          "printedName": "Hashable"
+        },
+        {
+          "kind": "Conformance",
+          "name": "RawRepresentable",
+          "printedName": "RawRepresentable",
+          "children": [
+            {
+              "kind": "TypeWitness",
+              "name": "RawValue",
+              "printedName": "RawValue",
+              "children": [
+                {
+                  "kind": "TypeNominal",
+                  "name": "Int",
+                  "printedName": "Int",
+                  "usr": "s:Si"
+                }
+              ]
+            }
+          ]
+        }
       ]
     },
     {
@@ -743,7 +738,8 @@
       ],
       "declKind": "Func",
       "usr": "s:4cake4foo3yySDySiSSGF",
-      "moduleName": "cake"
+      "moduleName": "cake",
+      "funcSelfKind": "NonMutating"
     },
     {
       "kind": "TypeDecl",
@@ -804,8 +800,7 @@
               "implicit": true,
               "declAttributes": [
                 "Transparent"
-              ],
-              "mutating": true
+              ]
             }
           ],
           "declKind": "Var",
@@ -814,60 +809,7 @@
           "declAttributes": [
             "HasInitialValue"
           ],
-          "fixedbinaryorder": 0,
           "hasStorage": true
-        },
-        {
-          "kind": "Constructor",
-          "name": "init",
-          "printedName": "init(a:b:c:)",
-          "children": [
-            {
-              "kind": "TypeNominal",
-              "name": "fixedLayoutStruct",
-              "printedName": "fixedLayoutStruct",
-              "usr": "s:4cake17fixedLayoutStructV"
-            },
-            {
-              "kind": "TypeNominal",
-              "name": "Int",
-              "printedName": "Int",
-              "usr": "s:Si"
-            },
-            {
-              "kind": "TypeNominal",
-              "name": "Int",
-              "printedName": "Int",
-              "usr": "s:Si"
-            },
-            {
-              "kind": "TypeNominal",
-              "name": "Int",
-              "printedName": "Int",
-              "usr": "s:Si"
-            }
-          ],
-          "declKind": "Constructor",
-          "usr": "s:4cake17fixedLayoutStructV1a1b1cACSi_S2itc33_3D8926C30F7417F2EF9A277D0C73FBDBLlfc",
-          "moduleName": "cake",
-          "implicit": true
-        },
-        {
-          "kind": "Constructor",
-          "name": "init",
-          "printedName": "init()",
-          "children": [
-            {
-              "kind": "TypeNominal",
-              "name": "fixedLayoutStruct",
-              "printedName": "fixedLayoutStruct",
-              "usr": "s:4cake17fixedLayoutStructV"
-            }
-          ],
-          "declKind": "Constructor",
-          "usr": "s:4cake17fixedLayoutStructVACycfc",
-          "moduleName": "cake",
-          "implicit": true
         }
       ],
       "declKind": "Struct",
@@ -922,7 +864,8 @@
           "declKind": "Func",
           "usr": "s:4cake21ProWithAssociatedTypePAAE10NonReqFuncyyF",
           "moduleName": "cake",
-          "genericSig": "<Self where Self : ProWithAssociatedType>"
+          "genericSig": "<Self where Self : ProWithAssociatedType>",
+          "funcSelfKind": "NonMutating"
         },
         {
           "kind": "Var",
@@ -1067,7 +1010,8 @@
           "usr": "s:4cake6PSuperP3fooyyF",
           "moduleName": "cake",
           "genericSig": "<Self where Self : PSuper>",
-          "protocolReq": true
+          "protocolReq": true,
+          "funcSelfKind": "NonMutating"
         }
       ],
       "declKind": "Protocol",
@@ -1108,15 +1052,20 @@
           "overriding": true,
           "declAttributes": [
             "Override"
-          ]
+          ],
+          "funcSelfKind": "NonMutating"
         }
       ],
       "declKind": "Protocol",
       "usr": "s:4cake4PSubP",
       "moduleName": "cake",
       "genericSig": "<Self : PSuper>",
-      "conformingProtocols": [
-        "PSuper"
+      "conformances": [
+        {
+          "kind": "Conformance",
+          "name": "PSuper",
+          "printedName": "PSuper"
+        }
       ]
     },
     {
@@ -1141,6 +1090,16 @@
       "hasStorage": true
     },
     {
+      "kind": "OperatorDecl",
+      "name": "..*..",
+      "printedName": "..*..",
+      "declKind": "InfixOperator",
+      "moduleName": "cake",
+      "declAttributes": [
+        "Infix"
+      ]
+    },
+    {
       "kind": "TypeDecl",
       "name": "Int",
       "printedName": "Int",
@@ -1158,7 +1117,8 @@
           ],
           "declKind": "Func",
           "usr": "s:Si4cakeE3fooyyF",
-          "moduleName": "cake"
+          "moduleName": "cake",
+          "funcSelfKind": "NonMutating"
         },
         {
           "kind": "Function",
@@ -1173,7 +1133,8 @@
           ],
           "declKind": "Func",
           "usr": "s:Si4cakeE3baryyF",
-          "moduleName": "cake"
+          "moduleName": "cake",
+          "funcSelfKind": "NonMutating"
         }
       ],
       "declKind": "Struct",
@@ -1182,28 +1143,171 @@
       "declAttributes": [
         "FixedLayout"
       ],
-      "conformingProtocols": [
-        "Comparable",
-        "SignedInteger",
-        "_ExpressibleByBuiltinIntegerLiteral",
-        "BinaryInteger",
-        "LosslessStringConvertible",
-        "SignedNumeric",
-        "Numeric",
-        "CustomStringConvertible",
-        "Strideable",
-        "ExpressibleByIntegerLiteral",
-        "FixedWidthInteger",
-        "P1",
-        "Encodable",
-        "Decodable",
-        "Hashable",
-        "Equatable",
-        "_HasCustomAnyHashableRepresentation",
-        "CustomReflectable",
-        "_CustomPlaygroundQuickLookable",
-        "MirrorPath",
-        "CVarArg"
+      "conformances": [
+        {
+          "kind": "Conformance",
+          "name": "Comparable",
+          "printedName": "Comparable"
+        },
+        {
+          "kind": "Conformance",
+          "name": "SignedInteger",
+          "printedName": "SignedInteger"
+        },
+        {
+          "kind": "Conformance",
+          "name": "BinaryInteger",
+          "printedName": "BinaryInteger",
+          "children": [
+            {
+              "kind": "TypeWitness",
+              "name": "Words",
+              "printedName": "Words",
+              "children": [
+                {
+                  "kind": "TypeNominal",
+                  "name": "Words",
+                  "printedName": "Int.Words",
+                  "usr": "s:Si5WordsV"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "Conformance",
+          "name": "LosslessStringConvertible",
+          "printedName": "LosslessStringConvertible"
+        },
+        {
+          "kind": "Conformance",
+          "name": "SignedNumeric",
+          "printedName": "SignedNumeric"
+        },
+        {
+          "kind": "Conformance",
+          "name": "Numeric",
+          "printedName": "Numeric",
+          "children": [
+            {
+              "kind": "TypeWitness",
+              "name": "Magnitude",
+              "printedName": "Magnitude",
+              "children": [
+                {
+                  "kind": "TypeNameAlias",
+                  "name": "Magnitude",
+                  "printedName": "Int.Magnitude",
+                  "children": [
+                    {
+                      "kind": "TypeNominal",
+                      "name": "UInt",
+                      "printedName": "UInt",
+                      "usr": "s:Su"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "Conformance",
+          "name": "CustomStringConvertible",
+          "printedName": "CustomStringConvertible"
+        },
+        {
+          "kind": "Conformance",
+          "name": "Strideable",
+          "printedName": "Strideable",
+          "children": [
+            {
+              "kind": "TypeWitness",
+              "name": "Stride",
+              "printedName": "Stride",
+              "children": [
+                {
+                  "kind": "TypeNominal",
+                  "name": "Int",
+                  "printedName": "Int",
+                  "usr": "s:Si"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "Conformance",
+          "name": "ExpressibleByIntegerLiteral",
+          "printedName": "ExpressibleByIntegerLiteral",
+          "children": [
+            {
+              "kind": "TypeWitness",
+              "name": "IntegerLiteralType",
+              "printedName": "IntegerLiteralType",
+              "children": [
+                {
+                  "kind": "TypeNameAlias",
+                  "name": "IntegerLiteralType",
+                  "printedName": "Int.IntegerLiteralType",
+                  "children": [
+                    {
+                      "kind": "TypeNominal",
+                      "name": "Int",
+                      "printedName": "Int",
+                      "usr": "s:Si"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "Conformance",
+          "name": "FixedWidthInteger",
+          "printedName": "FixedWidthInteger"
+        },
+        {
+          "kind": "Conformance",
+          "name": "P1",
+          "printedName": "P1"
+        },
+        {
+          "kind": "Conformance",
+          "name": "Encodable",
+          "printedName": "Encodable"
+        },
+        {
+          "kind": "Conformance",
+          "name": "Decodable",
+          "printedName": "Decodable"
+        },
+        {
+          "kind": "Conformance",
+          "name": "Hashable",
+          "printedName": "Hashable"
+        },
+        {
+          "kind": "Conformance",
+          "name": "Equatable",
+          "printedName": "Equatable"
+        },
+        {
+          "kind": "Conformance",
+          "name": "CustomReflectable",
+          "printedName": "CustomReflectable"
+        },
+        {
+          "kind": "Conformance",
+          "name": "MirrorPath",
+          "printedName": "MirrorPath"
+        },
+        {
+          "kind": "Conformance",
+          "name": "CVarArg",
+          "printedName": "CVarArg"
+        }
       ]
     }
   ]

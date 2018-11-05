@@ -263,9 +263,7 @@ void TypeChecker::checkProtocolSelfRequirements(ValueDecl *decl) {
         continue;
 
       diagnose(decl,
-               Context.isSwiftVersion3()
-                 ? diag::requirement_restricts_self_swift3
-                 : diag::requirement_restricts_self,
+               diag::requirement_restricts_self,
                decl->getDescriptiveKind(), decl->getFullName(),
                req.getFirstType().getString(),
                static_cast<unsigned>(req.getKind()),
@@ -826,7 +824,6 @@ RequirementCheckResult TypeChecker::checkGenericArguments(
   SmallVector<RequirementSet, 8> pendingReqs;
   pendingReqs.push_back({requirements, {}});
 
-  auto *env = dc->getGenericEnvironmentOfContext();
   ASTContext &ctx = dc->getASTContext();
   while (!pendingReqs.empty()) {
     auto current = pendingReqs.pop_back_val();
@@ -847,21 +844,15 @@ RequirementCheckResult TypeChecker::checkGenericArguments(
       auto kind = req.getKind();
       Type rawFirstType = rawReq.getFirstType();
       Type firstType = req.getFirstType();
-      if (firstType->hasTypeParameter()) {
-        if (!env)
-          continue;
-        firstType = env->mapTypeIntoContext(firstType);
-      }
+      if (firstType->hasTypeParameter())
+        firstType = dc->mapTypeIntoContext(firstType);
 
       Type rawSecondType, secondType;
       if (kind != RequirementKind::Layout) {
         rawSecondType = rawReq.getSecondType();
         secondType = req.getSecondType();
-        if (secondType->hasTypeParameter()) {
-          if (!env)
-            continue;
-          secondType = env->mapTypeIntoContext(secondType);
-        }
+        if (secondType->hasTypeParameter())
+          secondType = dc->mapTypeIntoContext(secondType);
       }
 
       // Don't do further checking on error types.
@@ -933,9 +924,7 @@ RequirementCheckResult TypeChecker::checkGenericArguments(
 
       case RequirementKind::Superclass: {
         // Superclass requirements.
-        // FIXME: Don't use the type checker instance here?
-        TypeChecker &tc = static_cast<TypeChecker &>(*ctx.getLazyResolver());
-        if (!tc.isSubclassOf(firstType, secondType, dc)) {
+        if (!secondType->isExactSuperclassOf(firstType)) {
           diagnostic = diag::type_does_not_inherit;
           diagnosticNote = diag::type_does_not_inherit_or_conform_requirement;
           requirementFailure = true;

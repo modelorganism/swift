@@ -265,7 +265,6 @@ public struct IndexPath : ReferenceConvertible, Equatable, Hashable, MutableColl
                     default:
                         fatalError("Range \(range) is out of bounds of count 1")
                     }
-                    return self
                 case .pair(let first, let second):
                     
                     switch (range.lowerBound, range.upperBound) {
@@ -780,6 +779,7 @@ extension IndexPath : _ObjectiveCBridgeable {
         return true
     }
     
+    @_effects(readonly)
     public static func _unconditionallyBridgeFromObjectiveC(_ source: NSIndexPath?) -> IndexPath {
         guard let src = source else { return IndexPath() }
         return IndexPath(nsIndexPath: src)

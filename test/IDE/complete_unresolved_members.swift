@@ -37,6 +37,9 @@
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_28 | %FileCheck %s -check-prefix=UNRESOLVED_1
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_29 | %FileCheck %s -check-prefix=UNRESOLVED_1
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_30 | %FileCheck %s -check-prefix=UNRESOLVED_2
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_31 | %FileCheck %s -check-prefix=UNRESOLVED_2
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_32 | %FileCheck %s -check-prefix=UNRESOLVED_3
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_33 | %FileCheck %s -check-prefix=UNRESOLVED_3
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_AVAIL_1 | %FileCheck %s -check-prefix=ENUM_AVAIL_1
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OPTIONS_AVAIL_1 | %FileCheck %s -check-prefix=OPTIONS_AVAIL_1
@@ -62,8 +65,13 @@
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GENERIC_1 | %FileCheck %s -check-prefix=GENERIC_1 -check-prefix=GENERIC_1_INT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GENERIC_2 | %FileCheck %s -check-prefix=GENERIC_1 -check-prefix=GENERIC_1_INT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GENERIC_3 | %FileCheck %s -check-prefix=GENERIC_1 -check-prefix=GENERIC_1_U
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GENERIC_4 | %FileCheck %s -check-prefix=GENERIC_1 -check-prefix=GENERIC_1_INT
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=STATIC_CLOSURE_1 | %FileCheck %s -check-prefix=STATIC_CLOSURE_1
+
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOADED_METHOD_1 | %FileCheck %s -check-prefix=OVERLOADED_METHOD_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOADED_INIT_1 | %FileCheck %s -check-prefix=OVERLOADED_METHOD_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOADED_INIT_2 | %FileCheck %s -check-prefix=OVERLOADED_METHOD_1
 
 enum SomeEnum1 {
   case South
@@ -305,6 +313,11 @@ let TopLevelVar1 = OptionSetTaker7([.#^UNRESOLVED_28^#], Op2: [.Option4])
 let TopLevelVar2 = OptionSetTaker1([.#^UNRESOLVED_29^#])
 
 let TopLevelVar3 = OptionSetTaker7([.Option1], Op2: [.#^UNRESOLVED_30^#])
+let TopLevelVar4 = OptionSetTaker7([.Option1], Op2: [.Option4, .#^UNRESOLVED_31^#])
+
+let _: [SomeEnum1] = [.#^UNRESOLVED_32^#]
+let _: [SomeEnum1] = [.South, .#^UNRESOLVED_33^#]
+let _: [SomeEnum1:SomeEnum2] = [.South:.West, .#^UNRESOLVED_34^#:]
 
 func testAvail1(_ x: EnumAvail1) {
   testAvail1(.#^ENUM_AVAIL_1^#)
@@ -423,6 +436,8 @@ func testInStringInterpolation() {
 class BaseClass {
   class SubClass : BaseClass { init() {} }
   static var subInstance: SubClass = SubClass()
+  init() {}
+  init?(failable: Void) {}
 }
 protocol MyProtocol {
   typealias Concrete1 = BaseClass
@@ -433,17 +448,19 @@ struct AnotherTy: MyProtocol {}
 func testSubType() {
   var _: BaseClass = .#^SUBTYPE_1^#
 }
-// SUBTYPE_1: Begin completions, 4 items
+// SUBTYPE_1: Begin completions, 3 items
+// SUBTYPE_1-NOT: init(failable:
+// SUBTYPE_1-NOT: Concrete1(
 // SUBTYPE_1-DAG: Decl[Constructor]/CurrNominal/TypeRelation[Identical]: init()[#BaseClass#];
 // SUBTYPE_1-DAG: Decl[Constructor]/CurrNominal/TypeRelation[Convertible]: SubClass()[#BaseClass.SubClass#];
 // SUBTYPE_1-DAG: Decl[StaticVar]/CurrNominal/TypeRelation[Convertible]: subInstance[#BaseClass.SubClass#];
-// SUBTYPE_1-DAG: Decl[Constructor]/Super/TypeRelation[Identical]: Concrete1()[#BaseClass#];
 // SUBTYPE_1: End completions
 
 func testMemberTypealias() {
   var _: MyProtocol = .#^SUBTYPE_2^#
 }
 // SUBTYPE_2: Begin completions, 2 items
+// SUBTYPE_1-NOT: Concrete1(failable:
 // SUBTYPE_2-DAG: Decl[Constructor]/CurrNominal/TypeRelation[Convertible]: Concrete1()[#BaseClass#];
 // SUBTYPE_2-DAG: Decl[Constructor]/CurrNominal/TypeRelation[Convertible]: Concrete2()[#AnotherTy#];
 // SUBTYPE_2: End completions
@@ -461,6 +478,10 @@ func testGeneric() {
   }
   takeGenericInt(.#^GENERIC_2^#)
   takeGenericU(.#^GENERIC_3^#)
+}
+
+switch Generic<Int>.empty {
+case let .#^GENERIC_4^#
 }
 // GENERIC_1: Begin completions
 // GENERIC_1:     Decl[EnumElement]/ExprSpecific:     contains({#content: T#})[#(T) -> Generic<T>#];
@@ -482,3 +503,25 @@ func testHasStaticClosure() {
 // STATIC_CLOSURE_1-DAG: Decl[StaticVar]/CurrNominal:        create[#() -> HasCreator#];
 // STATIC_CLOSURE_1-NOT: create_curried
 // STATIC_CLOSURE_1: End completions
+
+struct HasOverloaded {
+  init(e: SomeEnum1) {}
+  init(e: SomeEnum2) {}
+  func takeEnum(_ e: SomeEnum1) -> Int { return 0 }
+  func takeEnum(_ e: SomeEnum2) -> Int { return 0 }
+}
+func testOverload(val: HasOverloaded) {
+  let _ = val.takeEnum(.#^OVERLOADED_METHOD_1^#)
+// OVERLOADED_METHOD_1: Begin completions, 4 items
+// OVERLOADED_METHOD_1-DAG: Decl[EnumElement]/ExprSpecific:     South[#SomeEnum1#]; name=South
+// OVERLOADED_METHOD_1-DAG: Decl[EnumElement]/ExprSpecific:     North[#SomeEnum1#]; name=North
+// OVERLOADED_METHOD_1-DAG: Decl[EnumElement]/ExprSpecific:     East[#SomeEnum2#]; name=East
+// OVERLOADED_METHOD_1-DAG: Decl[EnumElement]/ExprSpecific:     West[#SomeEnum2#]; name=West
+// OVERLOADED_METHOD_1: End completions
+
+  let _ = HasOverloaded.init(e: .#^OVERLOADED_INIT_1^#)
+// Same as OVERLOADED_METHOD_1.
+
+  let _ = HasOverloaded(e: .#^OVERLOADED_INIT_2^#)
+// Same as OVERLOADED_METHOD_1.
+}

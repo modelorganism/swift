@@ -122,9 +122,6 @@ namespace swift {
     /// completions.
     bool CodeCompleteCallPatternHeuristics = false;
 
-    /// Disable constraint system performance hacks.
-    bool DisableConstraintSolverPerformanceHacks = false;
-
     ///
     /// Flags for use by tests
     ///
@@ -193,6 +190,16 @@ namespace swift {
     /// Disable the shrink phase of the expression type checker.
     bool SolverDisableShrink = false;
 
+    /// Disable constraint system performance hacks.
+    bool DisableConstraintSolverPerformanceHacks = false;
+
+    /// \brief Enable experimental operator designated types feature.
+    bool EnableOperatorDesignatedTypes = false;
+
+    /// \brief Enable constraint solver support for experimental
+    ///        operator protocol designator feature.
+    bool SolverEnableOperatorDesignatedTypes = false;
+
     /// The maximum depth to which to test decl circularity.
     unsigned MaxCircularityDepth = 500;
 
@@ -202,9 +209,6 @@ namespace swift {
 
     /// \brief Enable experimental property behavior feature.
     bool EnableExperimentalPropertyBehaviors = false;
-
-    /// \brief Enable experimental operator protocol designator feature.
-    bool EnableOperatorDesignatedProtocols = false;
 
     /// \brief Staging flag for treating inout parameters as Thread Sanitizer
     /// accesses.
@@ -284,6 +288,10 @@ namespace swift {
     /// Whether to verify the parsed syntax tree and emit related diagnostics.
     bool VerifySyntaxTree = false;
 
+    /// Scaffolding to permit experimentation with finer-grained dependencies
+    /// and faster rebuilds.
+    bool EnableExperimentalDependencies = false;
+
     /// Sets the target we are building for and updates platform conditions
     /// to match.
     ///
@@ -348,11 +356,6 @@ namespace swift {
 
     ArrayRef<std::string> getCustomConditionalCompilationFlags() const {
       return CustomConditionalCompilationFlags;
-    }
-
-    /// Whether our effective Swift version is in the Swift 3 family
-    bool isSwiftVersion3() const {
-      return EffectiveLanguageVersion.isVersion3();
     }
 
     /// Whether our effective Swift version is at least 'major'.

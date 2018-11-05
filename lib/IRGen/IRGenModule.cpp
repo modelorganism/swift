@@ -48,6 +48,7 @@
 #include "llvm/Support/MD5.h"
 
 #include "GenEnum.h"
+#include "GenIntegerLiteral.h"
 #include "GenType.h"
 #include "IRGenModule.h"
 #include "IRGenDebugInfo.h"
@@ -166,6 +167,9 @@ IRGenModule::IRGenModule(IRGenerator &irgen,
   Int8PtrTy = llvm::Type::getInt8PtrTy(getLLVMContext());
   Int8PtrPtrTy = Int8PtrTy->getPointerTo(0);
   SizeTy = DataLayout.getIntPtrType(getLLVMContext(), /*addrspace*/ 0);
+
+  FloatTy = llvm::Type::getFloatTy(getLLVMContext());
+  DoubleTy = llvm::Type::getDoubleTy(getLLVMContext());
 
   auto CI = static_cast<ClangImporter*>(&*Context.getClangModuleLoader());
   assert(CI && "no clang module loader");
@@ -710,6 +714,12 @@ llvm::Module *IRGenModule::releaseModule() {
 bool IRGenerator::canEmitWitnessTableLazily(SILWitnessTable *wt) {
   if (Opts.UseJIT)
     return false;
+
+  // Regardless of the access level, if the witness table is shared it means
+  // we can safely not emit it. Every other module which needs it will generate
+  // its own shared copy of it.
+  if (wt->getLinkage() == SILLinkage::Shared)
+    return true;
 
   NominalTypeDecl *ConformingTy =
     wt->getConformance()->getType()->getNominalOrBoundGenericNominal();

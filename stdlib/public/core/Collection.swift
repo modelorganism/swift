@@ -634,7 +634,7 @@ public protocol Collection: Sequence where SubSequence: Collection {
 
   // FIXME(move-only types): `first` might not be implementable by collections
   // with move-only elements, since they would need to be able to somehow form
-  // a temporary `Optional<Element>` value from a nonoptional Element without
+  // a temporary `Optional<Element>` value from a non-optional Element without
   // modifying the collection.
 
   /// The first element of the collection.
@@ -1210,24 +1210,10 @@ extension Collection {
   ///     // Prints "10"
   @inlinable
   public var first: Element? {
-    @inline(__always)
-    get {
-      // NB: Accessing `startIndex` may not be O(1) for some lazy collections,
-      // so instead of testing `isEmpty` and then returning the first element,
-      // we'll just rely on the fact that the iterator always yields the
-      // first element first.
-      var i = makeIterator()
-      return i.next()
-    }
+    let start = startIndex
+    if start != endIndex { return self[start] }
+    else { return nil }
   }
-  
-  // TODO: swift-3-indexing-model - uncomment and replace above ready (or should we still use the iterator one?)
-  /// Returns the first element of `self`, or `nil` if `self` is empty.
-  ///
-  /// - Complexity: O(1)
-  //  public var first: Element? {
-  //    return isEmpty ? nil : self[startIndex]
-  //  }
 
   /// A value less than or equal to the number of elements in the collection.
   ///
@@ -1267,6 +1253,7 @@ extension Collection {
   ///
   /// - Complexity: Hopefully less than O(`count`).
   @inlinable
+  @inline(__always)
   public // dispatching
   func _customIndexOfEquatableElement(_: Element) -> Index?? {
     return nil
@@ -1283,6 +1270,7 @@ extension Collection {
   ///
   /// - Complexity: Hopefully less than O(`count`).
   @inlinable
+  @inline(__always)
   public // dispatching
   func _customLastIndexOfEquatableElement(_ element: Element) -> Index?? {
     return nil
@@ -1802,6 +1790,7 @@ extension Collection where SubSequence == Self {
 
 extension Collection {
   @inlinable
+  @inline(__always)
   public func _preprocessingPass<R>(
     _ preprocess: () throws -> R
   ) rethrows -> R? {

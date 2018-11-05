@@ -191,6 +191,7 @@ static void addCommonFrontendArgs(const ToolChain &TC, const OutputInfo &OI,
   inputArgs.AddLastArg(arguments, options::OPT_import_underlying_module);
   inputArgs.AddLastArg(arguments, options::OPT_module_cache_path);
   inputArgs.AddLastArg(arguments, options::OPT_module_link_name);
+  inputArgs.AddLastArg(arguments, options::OPT_enable_parseable_module_interface);
   inputArgs.AddLastArg(arguments, options::OPT_nostdimport);
   inputArgs.AddLastArg(arguments, options::OPT_parse_stdlib);
   inputArgs.AddLastArg(arguments, options::OPT_resource_dir);
@@ -217,6 +218,8 @@ static void addCommonFrontendArgs(const ToolChain &TC, const OutputInfo &OI,
   inputArgs.AddLastArg(arguments, options::OPT_O_Group);
   inputArgs.AddLastArg(arguments, options::OPT_RemoveRuntimeAsserts);
   inputArgs.AddLastArg(arguments, options::OPT_AssumeSingleThreaded);
+  inputArgs.AddLastArg(arguments,
+                       options::OPT_enable_experimental_dependencies);
 
   // Pass on any build config options
   inputArgs.AddAllArgs(arguments, options::OPT_D);
@@ -436,7 +439,8 @@ const char *ToolChain::JobContext::computeFrontendModeForCompile() const {
   case file_types::TY_ModuleTrace:
   case file_types::TY_TBD:
   case file_types::TY_OptRecord:
-  case file_types::TY_SwiftModuleInterfaceFile:
+  case file_types::TY_SwiftParseableInterfaceFile:
+  case file_types::TY_SwiftParseableInterfaceDeps:
     llvm_unreachable("Output type can never be primary output.");
   case file_types::TY_INVALID:
     llvm_unreachable("Invalid type ID");
@@ -546,8 +550,8 @@ void ToolChain::JobContext::addFrontendSupplementaryOutputArguments(
                    "-emit-module-doc-path");
 
   addOutputsOfType(arguments, Output, Args,
-                   file_types::ID::TY_SwiftModuleInterfaceFile,
-                   "-emit-interface-path");
+                   file_types::ID::TY_SwiftParseableInterfaceFile,
+                   "-emit-parseable-module-interface-path");
 
   addOutputsOfType(arguments, Output, Args,
                    file_types::TY_SerializedDiagnostics,
@@ -668,7 +672,8 @@ ToolChain::constructInvocation(const BackendJobAction &job,
     case file_types::TY_Remapping:
     case file_types::TY_ModuleTrace:
     case file_types::TY_OptRecord:
-    case file_types::TY_SwiftModuleInterfaceFile:
+    case file_types::TY_SwiftParseableInterfaceFile:
+    case file_types::TY_SwiftParseableInterfaceDeps:
       llvm_unreachable("Output type can never be primary output.");
     case file_types::TY_INVALID:
       llvm_unreachable("Invalid type ID");
@@ -803,8 +808,8 @@ ToolChain::constructInvocation(const MergeModuleJobAction &job,
   addOutputsOfType(Arguments, context.Output, context.Args,
                    file_types::TY_SwiftModuleDocFile, "-emit-module-doc-path");
   addOutputsOfType(Arguments, context.Output, context.Args,
-                   file_types::ID::TY_SwiftModuleInterfaceFile,
-                   "-emit-interface-path");
+                   file_types::ID::TY_SwiftParseableInterfaceFile,
+                   "-emit-parseable-module-interface-path");
   addOutputsOfType(Arguments, context.Output, context.Args,
                    file_types::TY_SerializedDiagnostics,
                    "-serialize-diagnostics-path");

@@ -789,6 +789,8 @@ static CastConsumptionKind getCastConsumptionKind(unsigned attr) {
     return CastConsumptionKind::TakeOnSuccess;
   case SIL_CAST_CONSUMPTION_COPY_ON_SUCCESS:
     return CastConsumptionKind::CopyOnSuccess;
+  case SIL_CAST_CONSUMPTION_BORROW_ALWAYS:
+    return CastConsumptionKind::BorrowAlways;
   default:
     llvm_unreachable("not a valid CastConsumptionKind for SIL");
   }
@@ -1533,10 +1535,11 @@ bool SILDeserializer::readSILInstruction(SILFunction *Fn, SILBasicBlock *BB,
   }
   case SILInstructionKind::IntegerLiteralInst: {
     auto Ty = MF->getType(TyID);
-    auto intTy = Ty->castTo<BuiltinIntegerType>();
-    StringRef StringVal = MF->getIdentifierText(ValID);
-    // Build APInt from string.
-    APInt value(intTy->getGreatestWidth(), StringVal, 10);
+    auto intTy = Ty->castTo<AnyBuiltinIntegerType>();
+    StringRef text = MF->getIdentifierText(ValID);
+    bool negate = text[0] == '-';
+    if (negate) text = text.drop_front();
+    APInt value = intTy->getWidth().parse(text, 10, negate);
     ResultVal = Builder.createIntegerLiteral(Loc,
         getSILType(Ty, (SILValueCategory)TyCategory),
         value);

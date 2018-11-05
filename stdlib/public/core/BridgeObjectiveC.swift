@@ -78,6 +78,7 @@ public protocol _ObjectiveCBridgeable {
   /// implementation of `Swift.Array`'s conformance to
   /// `_ObjectiveCBridgeable` will produce an empty array rather than
   /// dynamically failing.
+  @_effects(readonly)
   static func _unconditionallyBridgeFromObjectiveC(_ source: _ObjectiveCType?)
       -> Self
 }
@@ -93,24 +94,19 @@ public protocol _ObjectiveCBridgeable {
 /// a metatype, make it conform to _ObjectiveCBridgeable, and its witness table
 /// will be ABI-compatible with one that directly provided conformance to the
 /// metatype type itself.
-@_fixed_layout
 public struct _BridgeableMetatype: _ObjectiveCBridgeable {
-  @usableFromInline // FIXME(sil-serialize-all)
   internal var value: AnyObject.Type
 
-  @inlinable // FIXME(sil-serialize-all)
   internal init(value: AnyObject.Type) {
     self.value = value
   }
 
   public typealias _ObjectiveCType = AnyObject
 
-  @inlinable // FIXME(sil-serialize-all)
   public func _bridgeToObjectiveC() -> AnyObject {
     return value
   }
 
-  @inlinable // FIXME(sil-serialize-all)
   public static func _forceBridgeFromObjectiveC(
     _ source: AnyObject,
     result: inout _BridgeableMetatype?
@@ -118,7 +114,6 @@ public struct _BridgeableMetatype: _ObjectiveCBridgeable {
     result = _BridgeableMetatype(value: source as! AnyObject.Type)
   }
 
-  @inlinable // FIXME(sil-serialize-all)
   public static func _conditionallyBridgeFromObjectiveC(
     _ source: AnyObject,
     result: inout _BridgeableMetatype?
@@ -132,7 +127,7 @@ public struct _BridgeableMetatype: _ObjectiveCBridgeable {
     return false
   }
 
-  @inlinable // FIXME(sil-serialize-all)
+  @_effects(readonly)
   public static func _unconditionallyBridgeFromObjectiveC(_ source: AnyObject?)
       -> _BridgeableMetatype {
     var result: _BridgeableMetatype?
@@ -307,7 +302,6 @@ public func _bridgeNonVerbatimFromObjectiveCConditional<T>(
 ///
 /// - If `T` is a class type, returns `true`;
 /// - otherwise, returns whether `T` conforms to `_ObjectiveCBridgeable`.
-@inlinable // FIXME(sil-serialize-all)
 public func _isBridgedToObjectiveC<T>(_: T.Type) -> Bool {
   if _fastPath(_isClassOrObjCExistential(T.self)) {
     return true
@@ -699,7 +693,6 @@ func _makeSwiftValue(_ value: Any) -> AnyObject {
 ///   the boxed value, but is otherwise opaque.
 ///
 /// COMPILER_INTRINSIC
-@inlinable // FIXME(sil-serialize-all)
 public func _bridgeAnythingToObjectiveC<T>(_ x: T) -> AnyObject {
   var done = false
   var result: AnyObject!

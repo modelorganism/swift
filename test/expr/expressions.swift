@@ -584,9 +584,9 @@ func conversionTest(_ a: inout Double, b: inout Int) {
   var pi_f3 = float.init(getPi()) // expected-error {{ambiguous use of 'init(_:)'}}
   var pi_f4 = float.init(pi_f)
 
-  var e = Empty(f)
+  var e = Empty(f) // expected-error {{variable 'e' cannot have enum type 'Empty' with no cases}}
   var e2 = Empty(d) // expected-error{{cannot convert value of type 'Double' to expected argument type 'Float'}}
-  var e3 = Empty(Float(d))
+  var e3 = Empty(Float(d)) // expected-error {{variable 'e3' cannot have enum type 'Empty' with no cases}}
 }
 
 struct Rule { // expected-note {{'init(target:dependencies:)' declared here}}
@@ -919,3 +919,13 @@ let _: Int64 = Int64(0xFFF_FFFF_FFFF_FFFF)
 let _: Int64 = 0xFFF_FFFF_FFFF_FFFF as Int64
 let _ = Int64(0xFFF_FFFF_FFFF_FFFF)
 let _ = 0xFFF_FFFF_FFFF_FFFF as Int64
+
+// rdar://problem/20289969 - string interpolation with comment containing ')' or '"'
+let _ = "foo \(42 /* ) " ) */)"
+let _ = "foo \(foo // )  " // expected-error {{unterminated string literal}}
+let _ = "foo \(42 /*
+                   * multiline comment
+                   */)end"
+// expected-error @-3 {{unterminated string literal}}
+// expected-error @-2 {{expected expression}}
+// expected-error @-3 {{unterminated string literal}}

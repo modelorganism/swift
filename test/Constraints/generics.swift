@@ -563,7 +563,7 @@ do {
 }
 
 func rdar35890334(_ arr: inout [Int]) {
-  _ = arr.popFirst() // expected-error {{value of type '[Int]' has no member 'popFirst'}}
+  _ = arr.popFirst() // expected-error {{referencing instance method 'popFirst()' on 'Collection' requires the types '[Int]' and 'ArraySlice<Int>' be equivalent}}
 }
 
 // rdar://problem/39616039
@@ -618,6 +618,16 @@ func rdar40537858() {
   }
 
   var s = S(id: S.Id())
-  let _: E = .foo(s)   // expected-error {{generic enum 'E' requires that 'S' conform to 'P'}}
-  let _: E = .bar([s]) // expected-error {{generic enum 'E' requires that 'S' conform to 'P'}}
+  let _: E = .foo(s)   // expected-error {{enum case 'foo' requires that 'S' conform to 'P'}}
+  let _: E = .bar([s]) // expected-error {{enum case 'bar' requires that 'S' conform to 'P'}}
 }
+
+// SR-8934
+struct BottleLayout {
+    let count : Int
+}
+let arr = [BottleLayout]()
+let layout = BottleLayout(count:1)
+let ix = arr.firstIndex(of:layout) // expected-error {{argument type 'BottleLayout' does not conform to expected type 'Equatable'}}
+
+let _: () -> UInt8 = { .init("a" as Unicode.Scalar) } // expected-error {{initializer 'init(_:)' requires that 'Unicode.Scalar' conform to 'BinaryInteger'}}

@@ -960,8 +960,8 @@ ParserResult<Expr> Parser::parseExprSuper(bool isExprBasic) {
 
 /// Copy a numeric literal value into AST-owned memory, stripping underscores
 /// so the semantic part of the value can be parsed by APInt/APFloat parsers.
-static StringRef copyAndStripUnderscores(ASTContext &C, StringRef orig) {
-  char *start = static_cast<char*>(C.Allocate(orig.size(), 1));
+StringRef Parser::copyAndStripUnderscores(StringRef orig) {
+  char *start = static_cast<char*>(Context.Allocate(orig.size(), 1));
   char *p = start;
 
   if (p) {
@@ -1142,15 +1142,17 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
           continue;
         }
 
-        Result = makeParserResult(new (Context) UnresolvedDotExpr(
-            Result.get(), TokLoc, name, DeclNameLoc(nameLoc),
-            /*Implicit=*/false));
+        Result = makeParserResult(
+            Result, new (Context) UnresolvedDotExpr(Result.get(), TokLoc, name,
+                                                    DeclNameLoc(nameLoc),
+                                                    /*Implicit=*/false));
         continue;
       }
 
       // Handle "x.self" expr.
       if (Tok.is(tok::kw_self)) {
         Result = makeParserResult(
+            Result,
             new (Context) DotSelfExpr(Result.get(), TokLoc, consumeToken()));
         SyntaxContext->createNodeInPlace(SyntaxKind::DotSelfExpr);
         continue;
@@ -1186,9 +1188,9 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
       if (!Name)
         return nullptr;
       SyntaxContext->createNodeInPlace(SyntaxKind::MemberAccessExpr);
-      Result = makeParserResult(
-          new (Context) UnresolvedDotExpr(Result.get(), TokLoc, Name, NameLoc,
-                                          /*Implicit=*/false));
+      Result = makeParserResult(Result, new (Context) UnresolvedDotExpr(
+                                            Result.get(), TokLoc, Name, NameLoc,
+                                            /*Implicit=*/false));
 
       if (canParseAsGenericArgumentList()) {
         SmallVector<TypeRepr *, 8> args;
@@ -1201,8 +1203,9 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
         for (auto ty : args)
           locArgs.push_back(ty);
         SyntaxContext->createNodeInPlace(SyntaxKind::SpecializeExpr);
-        Result = makeParserResult(UnresolvedSpecializeExpr::create(Context,
-                                  Result.get(), LAngleLoc, locArgs, RAngleLoc));
+        Result = makeParserResult(
+            Result, UnresolvedSpecializeExpr::create(
+                        Context, Result.get(), LAngleLoc, locArgs, RAngleLoc));
       }
 
       continue;
@@ -1229,14 +1232,12 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
           /*isPostfix=*/true, isExprBasic, lSquareLoc, indexArgs,
           indexArgLabels, indexArgLabelLocs, rSquareLoc, trailingClosure,
           SyntaxKind::FunctionCallArgumentList);
-      if (status.hasCodeCompletion())
-        return makeParserCodeCompletionResult<Expr>();
-      if (status.isError() || Result.isNull())
-        return nullptr;
-      Result = makeParserResult(SubscriptExpr::create(
-          Context, Result.get(), lSquareLoc, indexArgs, indexArgLabels,
-          indexArgLabelLocs, rSquareLoc, trailingClosure, ConcreteDeclRef(),
-          /*implicit=*/false));
+      Result = makeParserResult(
+          status | Result,
+          SubscriptExpr::create(Context, Result.get(), lSquareLoc, indexArgs,
+                                indexArgLabels, indexArgLabelLocs, rSquareLoc,
+                                trailingClosure, ConcreteDeclRef(),
+                                /*implicit=*/false));
       SyntaxContext->createNodeInPlace(SyntaxKind::SubscriptExpr);
       continue;
     }
@@ -1265,13 +1266,10 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
 
       // Trailing closure implicitly forms a call.
       Result = makeParserResult(
-          ParserStatus(closure),
+          ParserStatus(closure) | ParserStatus(Result),
           CallExpr::create(Context, Result.get(), SourceLoc(), {}, {}, {},
                            SourceLoc(), closure.get(), /*implicit=*/false));
       SyntaxContext->createNodeInPlace(SyntaxKind::FunctionCallExpr);
-
-      if (Result.hasCodeCompletion())
-        return Result;
 
       // We only allow a single trailing closure on a call.  This could be
       // generalized in the future, but needs further design.
@@ -1282,8 +1280,8 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
 
     // Check for a ? suffix.
     if (consumeIf(tok::question_postfix)) {
-      Result = makeParserResult(
-          new (Context) BindOptionalExpr(Result.get(), TokLoc, /*depth*/ 0));
+      Result = makeParserResult(Result, new (Context) BindOptionalExpr(
+                                            Result.get(), TokLoc, /*depth*/ 0));
       SyntaxContext->createNodeInPlace(SyntaxKind::OptionalChainingExpr);
       hasBindOptional = true;
       continue;
@@ -1291,8 +1289,8 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
 
     // Check for a ! suffix.
     if (consumeIf(tok::exclaim_postfix)) {
-      Result =
-          makeParserResult(new (Context) ForceValueExpr(Result.get(), TokLoc));
+      Result = makeParserResult(
+          Result, new (Context) ForceValueExpr(Result.get(), TokLoc));
       SyntaxContext->createNodeInPlace(SyntaxKind::ForcedValueExpr);
       continue;
     }
@@ -1306,8 +1304,9 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
 
       Expr *oper = parseExprOperator();
 
-      Result = makeParserResult(new (Context) PostfixUnaryExpr(
-          oper, formUnaryArgument(Context, Result.get())));
+      Result = makeParserResult(
+          Result, new (Context) PostfixUnaryExpr(
+                      oper, formUnaryArgument(Context, Result.get())));
       SyntaxContext->createNodeInPlace(SyntaxKind::PostfixUnaryExpr);
       continue;
     }
@@ -1334,8 +1333,8 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
     // If we end up with an unknown token on this line, return an ErrorExpr
     // covering the range of the token.
     if (!Tok.isAtStartOfLine() && consumeIf(tok::unknown)) {
-      Result = makeParserResult(new (Context)
-                                    ErrorExpr(Result.get()->getSourceRange()));
+      Result = makeParserResult(
+          Result, new (Context) ErrorExpr(Result.get()->getSourceRange()));
       continue;
     }
 
@@ -1384,8 +1383,8 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
 ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
   SyntaxParsingContext ExprContext(SyntaxContext, SyntaxContextKind::Expr);
   auto Result = parseExprPrimary(ID, isExprBasic);
-  // If we had a parse error, don't attempt to parse suffixes.
-  if (Result.isParseError())
+  // If we couldn't parse any expr, don't attempt to parse suffixes.
+  if (Result.isNull())
     return Result;
 
   bool hasBindOptional = false;
@@ -1440,7 +1439,7 @@ ParserResult<Expr> Parser::parseExprPrimary(Diag<> ID, bool isExprBasic) {
   SyntaxParsingContext ExprContext(SyntaxContext, SyntaxContextKind::Expr);
   switch (Tok.getKind()) {
   case tok::integer_literal: {
-    StringRef Text = copyAndStripUnderscores(Context, Tok.getText());
+    StringRef Text = copyAndStripUnderscores(Tok.getText());
     SourceLoc Loc = consumeToken(tok::integer_literal);
     ExprContext.setCreateSyntax(SyntaxKind::IntegerLiteralExpr);
     return makeParserResult(new (Context)
@@ -1448,7 +1447,7 @@ ParserResult<Expr> Parser::parseExprPrimary(Diag<> ID, bool isExprBasic) {
                                                    /*Implicit=*/false));
   }
   case tok::floating_literal: {
-    StringRef Text = copyAndStripUnderscores(Context, Tok.getText());
+    StringRef Text = copyAndStripUnderscores(Tok.getText());
     SourceLoc Loc = consumeToken(tok::floating_literal);
     ExprContext.setCreateSyntax(SyntaxKind::FloatLiteralExpr);
     return makeParserResult(new (Context) FloatLiteralExpr(Text, Loc,
@@ -1599,7 +1598,7 @@ ParserResult<Expr> Parser::parseExprPrimary(Diag<> ID, bool isExprBasic) {
       memcpy(Ptr, "0.", 2);
       memcpy(Ptr+2, Tok.getText().data(), Tok.getLength());
       auto FltText = StringRef(Ptr, Tok.getLength()+2);
-      FltText = copyAndStripUnderscores(Context, FltText);
+      FltText = copyAndStripUnderscores(FltText);
       
       consumeToken(tok::integer_literal);
       return makeParserResult(new (Context)
@@ -2888,6 +2887,10 @@ ParserStatus Parser::parseExprList(tok leftTok, tok rightTok,
   trailingClosure = nullptr;
 
   StructureMarkerRAII ParsingExprList(*this, Tok);
+  
+  if (ParsingExprList.isFailed()) {
+    return makeParserError();
+  }
 
   leftLoc = consumeToken(leftTok);
   ParserStatus status = parseList(rightTok, leftLoc, rightLoc,
@@ -2921,6 +2924,15 @@ ParserStatus Parser::parseExprList(tok leftTok, tok rightTok,
       SubExpr = new(Context) UnresolvedDeclRefExpr(OperName,
                                                    DeclRefKind::Ordinary,
                                                    DeclNameLoc(Loc));
+    } else if (Kind == SyntaxKind::FunctionCallArgumentList &&
+               Tok.is(tok::code_complete)) {
+      // Handle call arguments specially because it may need argument labels.
+      auto CCExpr = new (Context) CodeCompletionExpr(Tok.getLoc());
+      if (CodeCompletion)
+        CodeCompletion->completeCallArg(CCExpr);
+      consumeIf(tok::code_complete);
+      SubExpr = CCExpr;
+      Status.setHasCodeCompletion();
     } else {
       auto ParsedSubExpr = parseExpr(diag::expected_expr_in_expr_list);
       SubExpr = ParsedSubExpr.getPtrOrNull();
@@ -3157,7 +3169,7 @@ Parser::parseExprCallSuffix(ParserResult<Expr> fn, bool isExprBasic) {
   if (peekToken().is(tok::code_complete) && CodeCompletion) {
     consumeToken(tok::l_paren);
     auto CCE = new (Context) CodeCompletionExpr(Tok.getLoc());
-    auto Result = makeParserResult(
+    auto Result = makeParserResult(fn,
       CallExpr::create(Context, fn.get(), SourceLoc(),
                        { CCE },
                        { Identifier() },
@@ -3188,20 +3200,10 @@ Parser::parseExprCallSuffix(ParserResult<Expr> fn, bool isExprBasic) {
                                       SyntaxKind::FunctionCallArgumentList);
 
   // Form the call.
-  auto Result = makeParserResult(status | fn, 
-                                 CallExpr::create(Context, fn.get(), lParenLoc,
-                                                  args, argLabels, argLabelLocs,
-                                                  rParenLoc, trailingClosure,
-                                                  /*implicit=*/false));
-
-  if (status.hasCodeCompletion()) {
-    if (CodeCompletion) {
-      CodeCompletion->completeCallArg(Result.get());
-    }
-    Result.setHasCodeCompletion();
-  }
-
-  return Result;
+  return makeParserResult(
+      status | fn, CallExpr::create(Context, fn.get(), lParenLoc, args,
+                                    argLabels, argLabelLocs, rParenLoc,
+                                    trailingClosure, /*implicit=*/false));
 }
 
 /// parseExprCollection - Parse a collection literal expression.

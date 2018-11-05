@@ -750,7 +750,7 @@ extension Sequence {
   ///
   /// - Complexity: O(*n*), where *n* is the length of the sequence.
   @inlinable
-  public func reversed() -> [Element] {
+  public __consuming func reversed() -> [Element] {
     // FIXME(performance): optimize to 1 pass?  But Array(self) can be
     // optimized to a memcpy() sometimes.  Those cases are usually collections,
     // though.
@@ -810,7 +810,7 @@ extension Sequence {
   /// Returns an array containing the non-`nil` results of calling the given
   /// transformation with each element of this sequence.
   ///
-  /// Use this method to receive an array of nonoptional values when your
+  /// Use this method to receive an array of non-optional values when your
   /// transformation produces an optional value.
   ///
   /// In this example, note the difference in the result of using `map` and

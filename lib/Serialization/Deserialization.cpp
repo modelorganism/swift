@@ -44,7 +44,7 @@ STATISTIC(NumNormalProtocolConformancesLoaded,
 STATISTIC(NumNormalProtocolConformancesCompleted,
           "# of normal protocol conformances completed");
 STATISTIC(NumNestedTypeShortcuts,
-          "# of same-module nested types resolved without lookup");
+          "# of nested types resolved without full lookup");
 
 using namespace swift;
 using namespace swift::serialization;
@@ -1444,10 +1444,6 @@ ModuleFile::resolveCrossReference(ModuleDecl *baseModule, uint32_t pathLen) {
         if (!extensionModule)
           extensionModule = baseType->getModuleContext();
 
-        // FIXME: If 'importedFromClang' is true but 'extensionModule' is an
-        // overlay module, the search below will fail and we'll fall back to
-        // the slow path.
-
         // Fault in extensions, then ask every file in the module.
         (void)baseType->getExtensions();
         TypeDecl *nestedType = nullptr;
@@ -1460,10 +1456,16 @@ ModuleFile::resolveCrossReference(ModuleDecl *baseModule, uint32_t pathLen) {
         }
 
         if (nestedType) {
-          values.clear();
-          values.push_back(nestedType);
-          ++NumNestedTypeShortcuts;
-          break;
+          SmallVector<ValueDecl *, 1> singleValueBuffer{nestedType};
+          filterValues(/*expectedTy*/Type(), extensionModule, genericSig,
+                       /*isType*/true, /*inProtocolExt*/false,
+                       importedFromClang, /*isStatic*/false, /*ctorInit*/None,
+                       singleValueBuffer);
+          if (!singleValueBuffer.empty()) {
+            values.assign({nestedType});
+            ++NumNestedTypeShortcuts;
+            break;
+          }
         }
 
         pathTrace.removeLast();
@@ -1837,6 +1839,9 @@ DeclContext *ModuleFile::getLocalDeclContext(DeclContextID DCID) {
     if (!declContextOrOffset.isComplete())
       declContextOrOffset = new (ctx)
         SerializedPatternBindingInitializer(binding, bindingIndex);
+
+    if (!blobData.empty())
+      binding->setInitStringRepresentation(bindingIndex, blobData);
     break;
   }
 
@@ -3396,19 +3401,23 @@ ModuleFile::getDeclCheckedImpl(DeclID DID) {
   case decls_block::PREFIX_OPERATOR_DECL: {
     IdentifierID nameID;
     DeclContextID contextID;
-    DeclID protoID;
+    ArrayRef<uint64_t> designatedNominalTypeDeclIDs;
 
     decls_block::PrefixOperatorLayout::readRecord(scratch, nameID, contextID,
-                                                  protoID);
+                                                  designatedNominalTypeDeclIDs);
     auto DC = getDeclContext(contextID);
 
-    Expected<Decl *> protocol = getDeclChecked(protoID);
-    if (!protocol)
-      return protocol.takeError();
+    SmallVector<NominalTypeDecl *, 1> designatedNominalTypes;
+    for (auto id : designatedNominalTypeDeclIDs) {
+      Expected<Decl *> nominal = getDeclChecked(id);
+      if (!nominal)
+        return nominal.takeError();
+      designatedNominalTypes.push_back(cast<NominalTypeDecl>(nominal.get()));
+    }
 
     auto result = createDecl<PrefixOperatorDecl>(
         DC, SourceLoc(), getIdentifier(nameID), SourceLoc(),
-        cast_or_null<ProtocolDecl>(protocol.get()));
+        ctx.AllocateCopy(designatedNominalTypes));
 
     declOrOffset = result;
     break;
@@ -3417,20 +3426,24 @@ ModuleFile::getDeclCheckedImpl(DeclID DID) {
   case decls_block::POSTFIX_OPERATOR_DECL: {
     IdentifierID nameID;
     DeclContextID contextID;
-    DeclID protoID;
+    ArrayRef<uint64_t> designatedNominalTypeDeclIDs;
 
-    decls_block::PostfixOperatorLayout::readRecord(scratch, nameID, contextID,
-                                                   protoID);
+    decls_block::PostfixOperatorLayout::readRecord(
+        scratch, nameID, contextID, designatedNominalTypeDeclIDs);
 
     auto DC = getDeclContext(contextID);
 
-    Expected<Decl *> protocol = getDeclChecked(protoID);
-    if (!protocol)
-      return protocol.takeError();
+    SmallVector<NominalTypeDecl *, 1> designatedNominalTypes;
+    for (auto id : designatedNominalTypeDeclIDs) {
+      Expected<Decl *> nominal = getDeclChecked(id);
+      if (!nominal)
+        return nominal.takeError();
+      designatedNominalTypes.push_back(cast<NominalTypeDecl>(nominal.get()));
+    }
 
     auto result = createDecl<PostfixOperatorDecl>(
         DC, SourceLoc(), getIdentifier(nameID), SourceLoc(),
-        cast_or_null<ProtocolDecl>(protocol.get()));
+        ctx.AllocateCopy(designatedNominalTypes));
 
     declOrOffset = result;
     break;
@@ -3440,32 +3453,30 @@ ModuleFile::getDeclCheckedImpl(DeclID DID) {
     IdentifierID nameID;
     DeclContextID contextID;
     DeclID precedenceGroupID;
-    DeclID protoID;
+    ArrayRef<uint64_t> designatedNominalTypeDeclIDs;
 
     decls_block::InfixOperatorLayout::readRecord(scratch, nameID, contextID,
-                                                 precedenceGroupID, protoID);
+                                                 precedenceGroupID,
+                                                 designatedNominalTypeDeclIDs);
 
-    PrecedenceGroupDecl *precedenceGroup = nullptr;
-    Identifier precedenceGroupName;
-    if (precedenceGroupID) {
-      precedenceGroup =
-        dyn_cast_or_null<PrecedenceGroupDecl>(getDecl(precedenceGroupID));
-      if (precedenceGroup) {
-        precedenceGroupName = precedenceGroup->getName();
-      }
-    }
+    Expected<Decl *> precedenceGroup = getDeclChecked(precedenceGroupID);
+    if (!precedenceGroup)
+      return precedenceGroup.takeError();
 
     auto DC = getDeclContext(contextID);
 
-    Expected<Decl *> protocol = getDeclChecked(protoID);
-    if (!protocol)
-      return protocol.takeError();
+    SmallVector<NominalTypeDecl *, 1> designatedNominalTypes;
+    for (auto id : designatedNominalTypeDeclIDs) {
+      Expected<Decl *> nominal = getDeclChecked(id);
+      if (!nominal)
+        return nominal.takeError();
+      designatedNominalTypes.push_back(cast<NominalTypeDecl>(nominal.get()));
+    }
 
     auto result = createDecl<InfixOperatorDecl>(
         DC, SourceLoc(), getIdentifier(nameID), SourceLoc(), SourceLoc(),
-        precedenceGroupName, SourceLoc(),
-        cast_or_null<ProtocolDecl>(protocol.get()));
-    result->setPrecedenceGroup(precedenceGroup);
+        cast_or_null<PrecedenceGroupDecl>(precedenceGroup.get()),
+        ctx.AllocateCopy(designatedNominalTypes));
 
     declOrOffset = result;
     break;

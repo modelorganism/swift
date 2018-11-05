@@ -580,6 +580,19 @@ public:
   bool isInstance() const { return Value & IsInstanceMask; }
 
   int_type getIntValue() const { return Value; }
+
+  enum : uintptr_t {
+    /// Bit used to indicate that an associated type witness is a pointer to
+    /// a mangled name (vs. a pointer to metadata).
+    AssociatedTypeMangledNameBit = 0x01,
+  };
+
+  enum : uint8_t {
+    /// Prefix byte used to identify an associated type whose mangled name
+    /// is relative to the protocol's context rather than the conforming
+    /// type's context.
+    AssociatedTypeInProtocolContextByte = 0xFF
+  };
 };
 
 /// Flags that go in a TargetConformanceDescriptor structure.
@@ -587,24 +600,9 @@ class ConformanceFlags {
 public:
   typedef uint32_t int_type;
 
-  enum class ConformanceKind {
-    /// A direct reference to a protocol witness table.
-    WitnessTable,
-    /// A function pointer that can be called to access the protocol witness
-    /// table.
-    WitnessTableAccessor,
-    /// A function pointer that can be called to access the protocol witness
-    /// table whose conformance is conditional on additional requirements that
-    /// must first be evaluated and then provided to the accessor function.
-    ConditionalWitnessTableAccessor,
-
-    First_Kind = WitnessTable,
-    Last_Kind = ConditionalWitnessTableAccessor,
-  };
-
 private:
   enum : int_type {
-    ConformanceKindMask = 0x07,      // 8 conformance kinds
+    UnusedLowBits = 0x07,      // historical conformance kind
 
     TypeMetadataKindMask = 0x7 << 3, // 8 type reference kinds
     TypeMetadataKindShift = 3,
@@ -614,16 +612,15 @@ private:
 
     NumConditionalRequirementsMask = 0xFF << 8,
     NumConditionalRequirementsShift = 8,
+
+    HasResilientWitnessesMask = 0x01 << 16,
+    HasGenericWitnessTableMask = 0x01 << 17,
   };
 
   int_type Value;
 
 public:
   ConformanceFlags(int_type value = 0) : Value(value) {}
-
-  ConformanceFlags withConformanceKind(ConformanceKind kind) const {
-    return ConformanceFlags((Value & ~ConformanceKindMask) | int_type(kind));
-  }
 
   ConformanceFlags withTypeReferenceKind(TypeReferenceKind kind) const {
     return ConformanceFlags((Value & ~TypeMetadataKindMask)
@@ -647,9 +644,18 @@ public:
                             | (n << NumConditionalRequirementsShift));
   }
 
-  /// Retrieve the conformance kind.
-  ConformanceKind getConformanceKind() const {
-    return ConformanceKind(Value & ConformanceKindMask);
+  ConformanceFlags withHasResilientWitnesses(bool hasResilientWitnesses) const {
+    return ConformanceFlags((Value & ~HasResilientWitnessesMask)
+                            | (hasResilientWitnesses? HasResilientWitnessesMask
+                                                    : 0));
+  }
+
+  ConformanceFlags withHasGenericWitnessTable(
+                                           bool hasGenericWitnessTable) const {
+    return ConformanceFlags((Value & ~HasGenericWitnessTableMask)
+                            | (hasGenericWitnessTable
+                                 ? HasGenericWitnessTableMask
+                                 : 0));
   }
 
   /// Retrieve the type reference kind kind.
@@ -681,6 +687,17 @@ public:
   unsigned getNumConditionalRequirements() const {
     return (Value & NumConditionalRequirementsMask)
               >> NumConditionalRequirementsShift;
+  }
+
+  /// Whether this conformance has any resilient witnesses.
+  bool hasResilientWitnesses() const {
+    return Value & HasResilientWitnessesMask;
+  }
+
+  /// Whether this conformance has a generic witness table that may need to
+  /// be instantiated.
+  bool hasGenericWitnessTable() const {
+    return Value & HasGenericWitnessTableMask;
   }
 
   int_type getIntValue() const { return Value; }
@@ -839,7 +856,11 @@ using FunctionTypeFlags = TargetFunctionTypeFlags<size_t>;
 
 template <typename int_type>
 class TargetParameterTypeFlags {
-  enum : int_type { ValueOwnershipMask = 0x7F, VariadicMask = 0x80 };
+  enum : int_type {
+    ValueOwnershipMask = 0x7F,
+    VariadicMask       = 0x80,
+    AutoClosureMask    = 0x100,
+  };
   int_type Data;
 
   constexpr TargetParameterTypeFlags(int_type Data) : Data(Data) {}
@@ -859,8 +880,15 @@ public:
                                               (isVariadic ? VariadicMask : 0));
   }
 
+  constexpr TargetParameterTypeFlags<int_type>
+  withAutoClosure(bool isAutoClosure) const {
+    return TargetParameterTypeFlags<int_type>(
+        (Data & ~AutoClosureMask) | (isAutoClosure ? AutoClosureMask : 0));
+  }
+
   bool isNone() const { return Data == 0; }
   bool isVariadic() const { return Data & VariadicMask; }
+  bool isAutoClosure() const { return Data & AutoClosureMask; }
 
   ValueOwnership getValueOwnership() const {
     return (ValueOwnership)(Data & ValueOwnershipMask);
@@ -984,8 +1012,6 @@ enum class ExclusivityFlags : uintptr_t {
   // Read or Modify).
   ActionMask       = 0x1,
 
-  // Downgrade exclusivity failures to a warning.
-  WarningOnly      = 0x10,
   // The runtime should track this access to check against subsequent accesses.
   Tracking         = 0x20
 };
@@ -1000,9 +1026,6 @@ static inline ExclusivityFlags &operator|=(ExclusivityFlags &lhs,
 static inline ExclusivityFlags getAccessAction(ExclusivityFlags flags) {
   return ExclusivityFlags(uintptr_t(flags)
                         & uintptr_t(ExclusivityFlags::ActionMask));
-}
-static inline bool isWarningOnly(ExclusivityFlags flags) {
-  return uintptr_t(flags) & uintptr_t(ExclusivityFlags::WarningOnly);
 }
 static inline bool isTracking(ExclusivityFlags flags) {
   return uintptr_t(flags) & uintptr_t(ExclusivityFlags::Tracking);
@@ -1240,12 +1263,12 @@ class TypeContextDescriptorFlags : public FlagSet<uint16_t> {
 
     // Type-specific flags:
 
-    /// The kind of reference that this class makes to its superclass
+    /// The kind of reference that this class makes to its resilient superclass
     /// descriptor.  A TypeReferenceKind.
     ///
     /// Only meaningful for class descriptors.
-    Class_SuperclassReferenceKind = 9,
-    Class_SuperclassReferenceKind_width = 3,
+    Class_ResilientSuperclassReferenceKind = 9,
+    Class_ResilientSuperclassReferenceKind_width = 3,
 
     /// Whether the immediate class members in this metadata are allocated
     /// at negative offsets.  For now, we don't use this.
@@ -1318,11 +1341,11 @@ public:
                                 class_areImmediateMembersNegative,
                                 class_setAreImmediateMembersNegative)
 
-  FLAGSET_DEFINE_FIELD_ACCESSORS(Class_SuperclassReferenceKind,
-                                 Class_SuperclassReferenceKind_width,
+  FLAGSET_DEFINE_FIELD_ACCESSORS(Class_ResilientSuperclassReferenceKind,
+                                 Class_ResilientSuperclassReferenceKind_width,
                                  TypeReferenceKind,
-                                 class_getSuperclassReferenceKind,
-                                 class_setSuperclassReferenceKind)
+                                 class_getResilientSuperclassReferenceKind,
+                                 class_setResilientSuperclassReferenceKind)
 };
 
 /// Flags for protocol context descriptors. These values are used as the
@@ -1648,6 +1671,40 @@ public:
   /// Is this request satisfied by a metadata that's in the given state?
   bool isSatisfiedBy(MetadataState state) const {
     return isAtLeast(state, getState());
+  }
+};
+
+/// Flags for Builtin.IntegerLiteral values.
+class IntegerLiteralFlags {
+public:
+  enum : size_t {
+    IsNegativeFlag = 0x1,
+
+    // Save some space for other flags.
+
+    BitWidthShift = 8,
+  };
+
+private:
+  size_t Data;
+
+  explicit IntegerLiteralFlags(size_t data) : Data(data) {}
+
+public:
+  constexpr IntegerLiteralFlags(size_t bitWidth, bool isNegative)
+    : Data((bitWidth << BitWidthShift)
+           | (isNegative ? IsNegativeFlag : 0)) {}
+
+  /// Return true if the value is negative.
+  bool isNegative() const { return Data & IsNegativeFlag; }
+
+  /// Return the minimum number of bits necessary to store the value in
+  /// two's complement, including a leading sign bit.
+  unsigned getBitWidth() const { return Data >> BitWidthShift; }
+
+  size_t getOpaqueValue() const { return Data; }
+  static IntegerLiteralFlags getFromOpaqueValue(size_t value) {
+    return IntegerLiteralFlags(value);
   }
 };
 
