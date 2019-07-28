@@ -432,31 +432,6 @@ Type TypeChecker::getUInt8Type(DeclContext *dc) {
   return ::getStdlibType(*this, UInt8Type, dc, "UInt8");
 }
 
-/// Returns the maximum-sized builtin integer type.
-Type TypeChecker::getMaxIntegerType(DeclContext *dc) {
-  if (!MaxIntegerType.isNull())
-    return MaxIntegerType;
-
-  SmallVector<ValueDecl *, 1> lookupResults;
-  getStdlibModule(dc)->lookupValue(/*AccessPath=*/{},
-                                   Context.Id_MaxBuiltinIntegerType,
-                                   NLKind::QualifiedLookup, lookupResults);
-  if (lookupResults.size() != 1)
-    return MaxIntegerType;
-
-  auto *maxIntegerTypeDecl = dyn_cast<TypeAliasDecl>(lookupResults.front());
-  if (!maxIntegerTypeDecl)
-    return MaxIntegerType;
-
-  validateDecl(maxIntegerTypeDecl);
-  if (!maxIntegerTypeDecl->hasInterfaceType() ||
-      !maxIntegerTypeDecl->getDeclaredInterfaceType()->is<BuiltinIntegerType>())
-    return MaxIntegerType;
-
-  MaxIntegerType = maxIntegerTypeDecl->getUnderlyingTypeLoc().getType();
-  return MaxIntegerType;
-}
-
 /// Find the standard type of exceptions.
 ///
 /// We call this the "exception type" to try to avoid confusion with
@@ -2118,7 +2093,6 @@ Type TypeResolver::resolveAttributedType(TypeAttributes &attrs,
 
     // Resolve the function type directly with these attributes.
     FunctionType::ExtInfo extInfo(rep,
-                                  attrs.has(TAK_autoclosure),
                                   attrs.has(TAK_noescape),
                                   fnRepr->throws());
 
@@ -2267,6 +2241,10 @@ bool TypeResolver::resolveASTFunctionTypeParams(
       variadic = true;
     }
 
+    bool autoclosure = false;
+    if (auto *ATR = dyn_cast<AttributedTypeRepr>(eltTypeRepr))
+      autoclosure = ATR->getAttrs().has(TAK_autoclosure);
+
     Type ty = resolveType(eltTypeRepr, thisElementOptions);
     if (!ty) return true;
 
@@ -2306,8 +2284,8 @@ bool TypeResolver::resolveASTFunctionTypeParams(
       ownership = ValueOwnership::Default;
       break;
     }
-    ParameterTypeFlags paramFlags =
-        ParameterTypeFlags::fromParameterType(ty, variadic, ownership);
+    auto paramFlags = ParameterTypeFlags::fromParameterType(
+        ty, variadic, autoclosure, ownership);
     elements.emplace_back(ty, Identifier(), paramFlags);
   }
 

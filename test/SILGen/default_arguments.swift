@@ -4,14 +4,14 @@
 
 // __FUNCTION__ used as top-level parameter produces the module name.
 // CHECK-LABEL: sil @main
-// CHECK:         string_literal utf16 "default_arguments"
+// CHECK:         string_literal utf8 "default_arguments"
 
 // Default argument for first parameter.
 // CHECK-LABEL: sil hidden @$s17default_arguments7defarg11i1d1sySi_SdSStFfA_ : $@convention(thin) () -> Int
 // CHECK: [[INT:%[0-9]+]] = metatype $@thin Int.Type
-// CHECK: [[LIT:%[0-9]+]] = integer_literal $Builtin.Int2048, 17
-// CHECK: [[CVT:%[0-9]+]] = function_ref @$sSi22_builtinIntegerLiteralSiBi{{[_0-9]*}}__tcfC
-// CHECK: [[RESULT:%[0-9]+]] = apply [[CVT]]([[LIT]], [[INT]]) : $@convention(method) (Builtin.Int2048, @thin Int.Type) -> Int
+// CHECK: [[LIT:%[0-9]+]] = integer_literal $Builtin.IntLiteral, 17
+// CHECK: [[CVT:%[0-9]+]] = function_ref @$sSi22_builtinIntegerLiteralSiBI_tcfC
+// CHECK: [[RESULT:%[0-9]+]] = apply [[CVT]]([[LIT]], [[INT]]) : $@convention(method) (Builtin.IntLiteral, @thin Int.Type) -> Int
 // CHECK: return [[RESULT]] : $Int
 
 // Default argument for third parameter.
@@ -44,9 +44,9 @@ func defarg2(_ i: Int, d: Double = 3.125, s: String = "Hello") { }
 // CHECK-LABEL: sil hidden @$s17default_arguments15testDefaultArg2{{[_0-9a-zA-Z]*}}F
 func testDefaultArg2() {
 // CHECK:  [[INT64:%[0-9]+]] = metatype $@thin Int.Type
-// CHECK:  [[INTLIT:%[0-9]+]] = integer_literal $Builtin.Int2048, 5
-// CHECK:  [[LITFN:%[0-9]+]] = function_ref @$sSi22_builtinIntegerLiteralSiBi{{[_0-9]*}}__tcfC
-// CHECK:  [[I:%[0-9]+]] = apply [[LITFN]]([[INTLIT]], [[INT64]]) : $@convention(method) (Builtin.Int2048, @thin Int.Type) -> Int
+// CHECK:  [[INTLIT:%[0-9]+]] = integer_literal $Builtin.IntLiteral, 5
+// CHECK:  [[LITFN:%[0-9]+]] = function_ref @$sSi22_builtinIntegerLiteralSiBI_tcfC
+// CHECK:  [[I:%[0-9]+]] = apply [[LITFN]]([[INTLIT]], [[INT64]]) : $@convention(method) (Builtin.IntLiteral, @thin Int.Type) -> Int
 // CHECK:  [[DFN:%[0-9]+]] = function_ref @$s17default_arguments7defarg2{{.*}}A0_ : $@convention(thin) () -> Double
 // CHECK:  [[D:%[0-9]+]] = apply [[DFN]]() : $@convention(thin) () -> Double
 // CHECK:  [[SFN:%[0-9]+]] = function_ref @$s17default_arguments7defarg2{{.*}}A1_ : $@convention(thin) () -> @owned String
@@ -60,11 +60,11 @@ func autocloseFile(x: @autoclosure () -> String = #file,
                    y: @autoclosure () -> Int = #line) { }
 // CHECK-LABEL: sil hidden @$s17default_arguments17testAutocloseFileyyF
 func testAutocloseFile() {
-  // CHECK-LABEL: sil private [transparent] @$s17default_arguments17testAutocloseFileyyFSSyXKfu_ : $@convention(thin) () -> @owned String
-  // CHECK: string_literal utf16{{.*}}default_arguments.swift
+  // CHECK-LABEL: sil private [transparent] @$s17default_arguments17testAutocloseFileyyFSSyXEfu_ : $@convention(thin) () -> @owned String
+  // CHECK: string_literal utf8{{.*}}default_arguments.swift
 
-  // CHECK-LABEL: sil private [transparent] @$s17default_arguments17testAutocloseFileyyFSiyXKfu0_ : $@convention(thin) () -> Int
-  // CHECK: integer_literal $Builtin.Int2048, [[@LINE+1]]
+  // CHECK-LABEL: sil private [transparent] @$s17default_arguments17testAutocloseFileyyFSiyXEfu0_ : $@convention(thin) () -> Int
+  // CHECK: integer_literal $Builtin.IntLiteral, [[@LINE+1]]
   autocloseFile()
 }
 
@@ -88,12 +88,12 @@ func closure(_: () -> ()) {}
 func autoclosure(_: @autoclosure () -> ()) {}
 
 // CHECK-LABEL: sil hidden @$s17default_arguments25testCallWithMagicLiteralsyyF
-// CHECK:         string_literal utf16 "testCallWithMagicLiterals()"
-// CHECK:         string_literal utf16 "testCallWithMagicLiterals()"
+// CHECK:         string_literal utf8 "testCallWithMagicLiterals()"
+// CHECK:         string_literal utf8 "testCallWithMagicLiterals()"
 // CHECK-LABEL: sil private @$s17default_arguments25testCallWithMagicLiteralsyyFyyXEfU_
-// CHECK:         string_literal utf16 "testCallWithMagicLiterals()"
-// CHECK-LABEL: sil private [transparent] @$s17default_arguments25testCallWithMagicLiteralsyyFyyXKfu_
-// CHECK:         string_literal utf16 "testCallWithMagicLiterals()"
+// CHECK:         string_literal utf8 "testCallWithMagicLiterals()"
+// CHECK-LABEL: sil private [transparent] @$s17default_arguments25testCallWithMagicLiteralsyyFyyXEfu_
+// CHECK:         string_literal utf8 "testCallWithMagicLiterals()"
 func testCallWithMagicLiterals() {
   testMagicLiterals()
   testMagicLiterals()
@@ -102,7 +102,7 @@ func testCallWithMagicLiterals() {
 }
 
 // CHECK-LABEL: sil hidden @$s17default_arguments25testPropWithMagicLiteralsSivg
-// CHECK:         string_literal utf16 "testPropWithMagicLiterals"
+// CHECK:         string_literal utf8 "testPropWithMagicLiterals"
 var testPropWithMagicLiterals: Int {
   testMagicLiterals()
   closure { testMagicLiterals() }
@@ -113,7 +113,7 @@ var testPropWithMagicLiterals: Int {
 class Foo {
 
   // CHECK-LABEL: sil hidden @$s17default_arguments3FooC3int6stringACSi_SStcfc : $@convention(method) (Int, @owned String, @owned Foo) -> @owned Foo
-  // CHECK:         string_literal utf16 "init(int:string:)"
+  // CHECK:         string_literal utf8 "init(int:string:)"
   init(int: Int, string: String = #function) {
     testMagicLiterals()
     closure { testMagicLiterals() }
@@ -121,7 +121,7 @@ class Foo {
   }
 
   // CHECK-LABEL: sil hidden @$s17default_arguments3FooCfd
-  // CHECK:         string_literal utf16 "deinit"
+  // CHECK:         string_literal utf8 "deinit"
   deinit {
     testMagicLiterals()
     closure { testMagicLiterals() }
@@ -129,7 +129,7 @@ class Foo {
   }
 
   // CHECK-LABEL: sil hidden @$s17default_arguments3FooCyS2icig
-  // CHECK:         string_literal utf16 "subscript(_:)"
+  // CHECK:         string_literal utf8 "subscript(_:)"
   subscript(x: Int) -> Int {
     testMagicLiterals()
     closure { testMagicLiterals() }
@@ -138,7 +138,7 @@ class Foo {
   }
  
   // CHECK-LABEL: sil private @globalinit_33_E52D764B1F2009F2390B2B8DF62DAEB8_func0
-  // CHECK:         string_literal utf16 "Foo" 
+  // CHECK:         string_literal utf8 "Foo" 
   static let x = Foo(int:0)
 
 }
@@ -148,17 +148,17 @@ testMagicLiterals()
 closure { testMagicLiterals() }
 autoclosure(testMagicLiterals())
 
-// CHECK: string_literal utf16 "default_arguments"
+// CHECK: string_literal utf8 "default_arguments"
 let y : String = #function 
 
 // CHECK-LABEL: sil hidden @$s17default_arguments16testSelectorCall_17withMagicLiteralsySi_SitF
-// CHECK:         string_literal utf16 "testSelectorCall(_:withMagicLiterals:)"
+// CHECK:         string_literal utf8 "testSelectorCall(_:withMagicLiterals:)"
 func testSelectorCall(_ x: Int, withMagicLiterals y: Int) {
   testMagicLiterals()
 }
 
 // CHECK-LABEL: sil hidden @$s17default_arguments32testSelectorCallWithUnnamedPieceyySi_SitF
-// CHECK:         string_literal utf16 "testSelectorCallWithUnnamedPiece(_:_:)"
+// CHECK:         string_literal utf8 "testSelectorCallWithUnnamedPiece(_:_:)"
 func testSelectorCallWithUnnamedPiece(_ x: Int, _ y: Int) {
   testMagicLiterals()
 }
@@ -249,10 +249,10 @@ func r20494437onSuccess(_ a: r20494437ExecutionContext) {
 func r18400194(_ a: Int, x: Int = 97) {}
 
 // CHECK-LABEL: sil hidden @$s17default_arguments9r18400194_1xySi_SitFfA0_
-// CHECK: integer_literal $Builtin.Int2048, 97
+// CHECK: integer_literal $Builtin.IntLiteral, 97
 
 // CHECK-LABEL: sil hidden @$s17default_arguments14test_r18400194yyF
-// CHECK: integer_literal $Builtin.Int2048, 1
+// CHECK: integer_literal $Builtin.IntLiteral, 1
 // CHECK:  function_ref @$s17default_arguments9r18400194_1xySi_SitFfA0_ : $@convention(thin) () -> Int
 // CHECK: function_ref @$s17default_arguments9r18400194_1xySi_SitF : $@convention(thin) (Int, Int) -> (){{.*}}
 func test_r18400194() {

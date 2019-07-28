@@ -363,7 +363,19 @@ bool NormalProtocolConformance::isRetroactive() const {
   // If the conformance occurs in the same module as the conforming type
   // definition, this is not a retroactive conformance.
   if (auto nominal = getType()->getAnyNominal()) {
-    if (module == nominal->getParentModule())
+    auto nominalModule = nominal->getParentModule();
+
+    // Consider the overlay module to be the "home" of a nominal type
+    // defined in a Clang module.
+    if (auto nominalClangModule =
+          dyn_cast<ClangModuleUnit>(nominal->getModuleScopeContext())) {
+      if (auto clangLoader = nominal->getASTContext().getClangModuleLoader()) {
+        if (auto overlayModule = nominalClangModule->getAdapterModule())
+          nominalModule = overlayModule;
+      }
+    }
+
+    if (module == nominalModule)
       return false;
   }
 
@@ -373,6 +385,23 @@ bool NormalProtocolConformance::isRetroactive() const {
 
 bool NormalProtocolConformance::isSynthesizedNonUnique() const {
   return isa<ClangModuleUnit>(getDeclContext()->getModuleScopeContext());
+}
+
+bool NormalProtocolConformance::isResilient() const {
+  // If the type is non-resilient or the module we're in is non-resilient, the
+  // conformance is non-resilient.
+  // FIXME: Looking at the type is not the right long-term solution. We need an
+  // explicit mechanism for declaring conformances as 'fragile', or even
+  // individual witnesses.
+  if (!getType()->getAnyNominal()->isResilient())
+    return false;
+
+  switch (getDeclContext()->getParentModule()->getResilienceStrategy()) {
+  case ResilienceStrategy::Resilient:
+    return true;
+  case ResilienceStrategy::Default:
+    return false;
+  }
 }
 
 Optional<ArrayRef<Requirement>>

@@ -14,6 +14,8 @@ let DemangleToMetadataTests = TestSuite("DemangleToMetadataObjC")
 @objc enum E: Int { case a }
 @objc protocol P1 { }
 protocol P2 { }
+@objc protocol P3: P1 { }
+@objc protocol mainP4 { }
 
 DemangleToMetadataTests.test("@objc classes") {
   expectEqual(type(of: C()), _typeByMangledName("4main1CC")!)
@@ -24,10 +26,13 @@ DemangleToMetadataTests.test("@objc enums") {
 }
 
 func f1_composition_objc_protocol(_: P1) { }
+func f1_composition_objc_protocol_P4(_: mainP4) { }
 
 DemangleToMetadataTests.test("@objc protocols") {
   expectEqual(type(of: f1_composition_objc_protocol),
               _typeByMangledName("yy4main2P1_pc")!)
+  expectEqual(type(of: f1_composition_objc_protocol_P4),
+              _typeByMangledName("yy4main0A2P4_pc")!)
 }
 
 DemangleToMetadataTests.test("Objective-C classes") {
@@ -94,6 +99,12 @@ DemangleToMetadataTests.test("members of runtime-only Objective-C classes") {
 DemangleToMetadataTests.test("runtime conformance lookup via foreign superclasses") {
   expectEqual(Set<CFMutableString>.self,
     _typeByMangledName("ShySo18CFMutableStringRefaG")!)
+}
+
+class F<T: P1> { }
+
+DemangleToMetadataTests.test("runtime conformance check for @objc protocol inheritance") {
+  expectEqual(F<P3>.self, _typeByMangledName("4main1FCyAA2P3PG")!)
 }
 
 runAllTests()

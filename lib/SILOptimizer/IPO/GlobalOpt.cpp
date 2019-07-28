@@ -274,9 +274,9 @@ static SILFunction *getGlobalGetterFunction(SILOptFunctionBuilder &FunctionBuild
                          /*params*/ {}, /*yields*/ {}, Results, None,
                          M.getASTContext());
   auto getterName = M.allocateCopy(getterNameTmp);
-  return FunctionBuilder.getOrCreateFunction(loc, getterName, Linkage,
-                                             LoweredType, IsBare,
-                                             IsNotTransparent, Serialized);
+  return FunctionBuilder.getOrCreateFunction(
+      loc, getterName, Linkage, LoweredType, IsBare, IsNotTransparent,
+      Serialized, IsNotDynamic);
 }
 
 /// Generate getter from the initialization code whose result is stored by a
@@ -292,13 +292,10 @@ static SILFunction *genGetterFromInit(SILOptFunctionBuilder &FunctionBuilder,
   auto V = Store->getSrc();
 
   SmallVector<SILInstruction *, 8> Insts;
-  Insts.push_back(Store);
-  Insts.push_back(cast<SingleValueInstruction>(Store->getDest()));
   if (!analyzeStaticInitializer(V, Insts))
     return nullptr;
-
-  // Produce a correct order of instructions.
-  std::reverse(Insts.begin(), Insts.end());
+  Insts.push_back(cast<SingleValueInstruction>(Store->getDest()));
+  Insts.push_back(Store);
 
   auto *GetterF = getGlobalGetterFunction(FunctionBuilder,
                                           Store->getModule(),

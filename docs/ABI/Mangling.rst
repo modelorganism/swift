@@ -87,6 +87,8 @@ The following symbolic reference kinds are currently implemented:
    protocol-conformance-ref ::= '\x03' .{4}  // Reference points directly to protocol conformance descriptor (NOT IMPLEMENTED)
    protocol-conformance-ref ::= '\x04' .{4}  // Reference points indirectly to protocol conformance descriptor (NOT IMPLEMENTED)
 
+   dependent-associated-conformance ::= '\x05' .{4}  // Reference points directly to associated conformance descriptor (NOT IMPLEMENTED)
+   dependent-associated-conformance ::= '\x06' .{4}  // Reference points indirectly to associated conformance descriptor (NOT IMPLEMENTED)
 
 Globals
 ~~~~~~~
@@ -111,7 +113,7 @@ Globals
   global ::= context 'MXE'               // extension descriptor
   global ::= context 'MXX'               // anonymous context descriptor
   global ::= context identifier 'MXY'    // anonymous context descriptor
-  global ::= type assoc-type-list 'MXA'  // generic parameter ref
+  global ::= type assoc-type-list 'MXA'  // generic parameter ref (HISTORICAL)
   global ::= protocol 'Mp'               // protocol descriptor
 
   global ::= nominal-type 'Mo'           // class metadata immediate member base offset
@@ -169,6 +171,8 @@ types where the metadata itself has unknown layout.)
   global ::= global 'To'                 // swift-as-ObjC thunk
   global ::= global 'TD'                 // dynamic dispatch thunk
   global ::= global 'Td'                 // direct method reference thunk
+  global ::= global 'TI'                 // implementation of a dynamic_replaceable function
+  global ::= global 'TX'                 // function pointer of a dynamic_replaceable function
   global ::= entity entity 'TV'          // vtable override thunk, derived followed by base
   global ::= type label-list? 'D'        // type mangling for the debugger with label list for function types.
   global ::= type 'TC'                   // continuation prototype (not actually used for real symbols)
@@ -285,8 +289,8 @@ Entities
   ACCESSOR ::= 'p'                           // pseudo accessor referring to the storage itself
 
   ADDRESSOR-KIND ::= 'u'                     // unsafe addressor (no owner)
-  ADDRESSOR-KIND ::= 'O'                     // owning addressor (non-native owner)
-  ADDRESSOR-KIND ::= 'o'                     // owning addressor (native owner)
+  ADDRESSOR-KIND ::= 'O'                     // owning addressor (non-native owner), not used anymore
+  ADDRESSOR-KIND ::= 'o'                     // owning addressor (native owner), not used anymore
   ADDRESSOR-KIND ::= 'p'                     // pinning addressor (native owner), not used anymore
 
   decl-name ::= identifier
@@ -619,13 +623,43 @@ Property behaviors are implemented using private protocol conformances.
 
 ::
 
-  concrete-protocol-conformance ::= type protocol-conformance-ref
+  concrete-protocol-conformance ::= type protocol-conformance-ref any-protocol-conformance-list 'HC'
   protocol-conformance-ref ::= protocol module?
 
+  any-protocol-conformance ::= concrete-protocol-conformance
+  any-protocol-conformance ::= dependent-protocol-conformance
+
+  any-protocol-conformance-list ::= any-protocol-conformance '_' any-protocol-conformance-list
+  any-protocol-conformance-list ::= empty-list
+
+  DEPENDENT-CONFORMANCE-INDEX ::= INDEX
+
+  dependent-protocol-conformance ::= type protocol 'HD' DEPENDENT-CONFORMANCE-INDEX
+  dependent-protocol-conformance ::= dependent-protocol-conformance protocol 'HI' DEPENDENT-CONFORMANCE-INDEX
+  dependent-protocol-conformance ::= dependent-protocol-conformance
+      dependent-associated-conformance 'HA' DEPENDENT-CONFORMANCE-INDEX
+
+  dependent-associated-conformance ::= type protocol
+
 A compact representation used to represent mangled protocol conformance witness
-arguments at runtime. The ``module`` is only specified for conformances that
-are "retroactive", meaning that the context in which the conformance is defined
-is in neither the protocol or type module.
+arguments at runtime. The ``module`` is only specified for conformances that are
+"retroactive", meaning that the context in which the conformance is defined is
+in neither the protocol or type module. The concrete protocol conformances that
+follow are for the conditional conformance requirements.
+
+Dependent protocol conformances mangle the access path required to extract a
+protocol conformance from some conformance passed into the environment. The
+first case (operator "HD") is the leaf requirement, containing a dependent type
+and the protocol it conforms to. The remaining dependent protocol conformance
+manglings describe lookups performed on their child dependent protocol
+conformances. The "HI" operator retrieves the named inherited protocol from the
+witness table produced by the child. The "HA" operator refers to an associated
+conformance within the witness table, identified by the dependent type and
+protocol. In all cases, the DEPENDENT-CONFORMANCE-INDEX is an INDEX value
+indicating the position of the appropriate value within the generic environment
+(for "HD") or witness table (for "HI" and "HA") when it is known to be at a
+fixed position. A position of zero is used to indicate "unknown"; all other
+values are adjusted by 1.
 
 ::
 
@@ -685,7 +719,7 @@ from any character in a ``<GENERIC-PARAM-COUNT>``.
 
 ::
 
-  retroactive-conformance ::= protocol-conformance 'g' INDEX
+  retroactive-conformance ::= any-protocol-conformance 'g' INDEX
 
 When a protocol conformance used to satisfy one of a bound generic type's
 generic requirements is retroactive (i.e., it is specified in a module other

@@ -1511,7 +1511,7 @@ namespace {
       auto flags = getMethodDescriptorFlags<Flags>(func);
 
       // Remember if the declaration was dynamic.
-      if (func->isDynamic())
+      if (func->isObjCDynamic())
         flags = flags.withIsDynamic(true);
 
       // TODO: final? open?
@@ -2293,9 +2293,10 @@ getAddrOfDestructorFunction(IRGenModule &IGM, ClassDecl *classDecl) {
 
 static void emitFieldOffsetGlobals(IRGenModule &IGM,
                                    ClassDecl *classDecl,
-                                   const ClassLayout &classLayout) {
+                                   const ClassLayout &fragileLayout,
+                                   const ClassLayout &resilientLayout) {
   for (auto prop : classDecl->getStoredProperties()) {
-    auto fieldInfo = classLayout.getFieldAccessAndElement(prop);
+    auto fieldInfo = fragileLayout.getFieldAccessAndElement(prop);
     auto access = fieldInfo.first;
     auto element = fieldInfo.second;
 
@@ -2323,8 +2324,19 @@ static void emitFieldOffsetGlobals(IRGenModule &IGM,
       auto offsetVar = cast<llvm::GlobalVariable>(offsetAddr.getAddress());
       offsetVar->setInitializer(fieldOffsetOrZero);
 
-      // If we know the offset won't change, make it a constant.
-      offsetVar->setConstant(access == FieldAccess::ConstantDirect);
+      // If the offset is constant in the resilient layout, it will not change
+      // at runtime, and the global can be true const.
+      //
+      // If it is constant in the fragile layout only, newer Objective-C
+      // runtimes will still update them in place, so make sure to check the
+      // correct layout.
+      auto resilientInfo = resilientLayout.getFieldAccessAndElement(prop);
+      if (resilientInfo.first == FieldAccess::ConstantDirect) {
+        // If it is constant in the resilient layout, it should be constant in
+        // the fragile layout also.
+        assert(access == FieldAccess::ConstantDirect);
+        offsetVar->setConstant(true);
+      }
 
       break;
     }
@@ -3015,11 +3027,12 @@ static void emitObjCClassSymbol(IRGenModule &IGM,
 
 /// Emit the type metadata or metadata template for a class.
 void irgen::emitClassMetadata(IRGenModule &IGM, ClassDecl *classDecl,
-                              const ClassLayout &fieldLayout) {
+                              const ClassLayout &fragileLayout,
+                              const ClassLayout &resilientLayout) {
   assert(!classDecl->isForeign());
   PrettyStackTraceDecl stackTraceRAII("emitting metadata for", classDecl);
 
-  emitFieldOffsetGlobals(IGM, classDecl, fieldLayout);
+  emitFieldOffsetGlobals(IGM, classDecl, fragileLayout, resilientLayout);
 
   // Set up a dummy global to stand in for the metadata object while we produce
   // relative references.
@@ -3034,28 +3047,28 @@ void irgen::emitClassMetadata(IRGenModule &IGM, ClassDecl *classDecl,
   bool canBeConstant;
   if (classDecl->isGenericContext()) {
     GenericClassMetadataBuilder builder(IGM, classDecl, init,
-                                        fieldLayout);
+                                        fragileLayout);
     builder.layout();
     canBeConstant = true;
 
     builder.createMetadataAccessFunction();
   } else if (doesClassMetadataRequireRelocation(IGM, classDecl)) {
     ResilientClassMetadataBuilder builder(IGM, classDecl, init,
-                                          fieldLayout);
+                                          fragileLayout);
     builder.layout();
     canBeConstant = true;
 
     builder.createMetadataAccessFunction();
   } else if (doesClassMetadataRequireInitialization(IGM, classDecl)) {
     SingletonClassMetadataBuilder builder(IGM, classDecl, init,
-                                          fieldLayout);
+                                          fragileLayout);
     builder.layout();
     canBeConstant = builder.canBeConstant();
 
     builder.createMetadataAccessFunction();
   } else {
     FixedClassMetadataBuilder builder(IGM, classDecl, init,
-                                      fieldLayout);
+                                      fragileLayout);
     builder.layout();
     canBeConstant = builder.canBeConstant();
 
@@ -4027,12 +4040,10 @@ SpecialProtocol irgen::getSpecialProtocolID(ProtocolDecl *P) {
   case KnownProtocolKind::ExpressibleByImageLiteral:
   case KnownProtocolKind::ExpressibleByFileReferenceLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinBooleanLiteral:
-  case KnownProtocolKind::ExpressibleByBuiltinUTF16ExtendedGraphemeClusterLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinExtendedGraphemeClusterLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinFloatLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinIntegerLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinStringLiteral:
-  case KnownProtocolKind::ExpressibleByBuiltinUTF16StringLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinUnicodeScalarLiteral:
   case KnownProtocolKind::OptionSet:
   case KnownProtocolKind::BridgedNSError:
@@ -4042,6 +4053,7 @@ SpecialProtocol irgen::getSpecialProtocolID(ProtocolDecl *P) {
   case KnownProtocolKind::CodingKey:
   case KnownProtocolKind::Encodable:
   case KnownProtocolKind::Decodable:
+  case KnownProtocolKind::StringInterpolationProtocol:
     return SpecialProtocol::None;
   }
 
@@ -4091,31 +4103,6 @@ void IRGenModule::emitProtocolDecl(ProtocolDecl *protocol) {
 // Generic requirements.
 //===----------------------------------------------------------------------===//
 
-/// Add a generic parameter reference to the given constant struct builder.
-static void addGenericParamRef(IRGenModule &IGM, ConstantStructBuilder &B,
-                               GenericSignature *sig, CanType type) {
-  // type should be either a generic parameter or dependent member type
-  // thereof.
-
-  if (auto genericParam = dyn_cast<GenericTypeParamType>(type)) {
-    // We can encode the ordinal of a direct type parameter reference
-    // inline.
-    auto ordinal = sig->getGenericParamOrdinal(genericParam);
-    B.addInt32(ordinal << 1);
-    return;
-  }
-
-  if (auto dmt = dyn_cast<DependentMemberType>(type)) {
-    // We have to encode the associated type path out-of-line.
-    auto assocTypeRecord = IGM.getAddrOfAssociatedTypeGenericParamRef(sig, dmt);
-
-    B.addTaggedRelativeOffset(IGM.Int32Ty, assocTypeRecord, 1);
-    return;
-  }
-
-  llvm_unreachable("not a generic parameter");
-}
-
 /// Add a generic requirement to the given constant struct builder.
 static void addGenericRequirement(IRGenModule &IGM, ConstantStructBuilder &B,
                                   GenericRequirementsMetadata &metadata,
@@ -4129,7 +4116,9 @@ static void addGenericRequirement(IRGenModule &IGM, ConstantStructBuilder &B,
     ++metadata.NumGenericExtraArguments;
 
   B.addInt(IGM.Int32Ty, flags.getIntValue());
-  addGenericParamRef(IGM, B, sig, paramType->getCanonicalType());
+  auto typeName =
+    IGM.getTypeRef(paramType->getCanonicalType(), MangledTypeRefRole::Metadata);
+  B.addRelativeAddress(typeName);
   addReference();
 }
 

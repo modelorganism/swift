@@ -426,7 +426,8 @@ FOR_KNOWN_FOUNDATION_TYPES(CACHE_FOUNDATION_DECL)
 };
 
 ASTContext::Implementation::Implementation()
-    : IdentifierTable(Allocator), TheSyntaxArena(new SyntaxArena()) {}
+    : IdentifierTable(Allocator),
+      TheSyntaxArena(new syntax::SyntaxArena()) {}
 ASTContext::Implementation::~Implementation() {
   delete Resolver;
 
@@ -3721,7 +3722,7 @@ void AnyFunctionType::decomposeInput(
   default:
     result.emplace_back(type->getInOutObjectType(), Identifier(),
                         ParameterTypeFlags::fromParameterType(
-                          type, false, ValueOwnership::Default));
+                          type, false, false, ValueOwnership::Default));
     return;
   }
 }

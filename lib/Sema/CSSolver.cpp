@@ -1550,6 +1550,7 @@ void ConstraintSystem::ArgumentInfoCollector::walk(Type argType) {
       case ConstraintKind::CheckedCast:
       case ConstraintKind::OpenedExistentialOf:
       case ConstraintKind::ApplicableFunction:
+      case ConstraintKind::DynamicCallableApplicableFunction:
       case ConstraintKind::BindOverload:
       case ConstraintKind::FunctionInput:
       case ConstraintKind::FunctionResult:
@@ -1750,6 +1751,9 @@ void ConstraintSystem::sortDesignatedTypes(
 
   for (auto *protocol : argInfo.getLiteralProtocols()) {
     auto defaultType = TC.getDefaultType(protocol, DC);
+    // ExpressibleByNilLiteral does not have a default type.
+    if (!defaultType)
+      continue;
     auto *nominal = defaultType->getAnyNominal();
     for (size_t i = nextType + 1; i < nominalTypes.size(); ++i) {
       if (nominal == nominalTypes[i]) {
@@ -1784,10 +1788,7 @@ void ConstraintSystem::partitionForDesignatedTypes(
     auto *funcDecl = cast<FuncDecl>(decl);
 
     auto *parentDC = funcDecl->getParent();
-    auto *parentDecl = parentDC->getAsDecl();
-
-    if (parentDC->isExtensionContext())
-      parentDecl = cast<ExtensionDecl>(parentDecl)->getExtendedNominal();
+    auto *parentDecl = parentDC->getSelfNominalTypeDecl();
 
     for (auto designatedTypeIndex : indices(designatedNominalTypes)) {
       auto *designatedNominal =
@@ -1797,7 +1798,7 @@ void ConstraintSystem::partitionForDesignatedTypes(
         continue;
 
       auto &constraints =
-          parentDC->isExtensionContext()
+          isa<ExtensionDecl>(parentDC)
               ? definedInExtensionOfDesignatedType[designatedTypeIndex]
               : definedInDesignatedType[designatedTypeIndex];
 

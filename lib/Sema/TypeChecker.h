@@ -832,7 +832,6 @@ public:
   Type getIntType(DeclContext *dc);
   Type getInt8Type(DeclContext *dc);
   Type getUInt8Type(DeclContext *dc);
-  Type getMaxIntegerType(DeclContext *dc);
   Type getNSObjectType(DeclContext *dc);
   Type getObjCSelectorType(DeclContext *dc);
   Type getExceptionType(DeclContext *dc, SourceLoc loc);
@@ -1081,6 +1080,12 @@ public:
 
   bool typeCheckClosureBody(ClosureExpr *closure);
 
+  bool typeCheckTapBody(TapExpr *expr, DeclContext *DC);
+
+  Type typeCheckParameterDefault(Expr *&defaultValue, DeclContext *DC,
+                                 Type paramType, bool isAutoClosure = false,
+                                 bool canFail = true);
+
   void typeCheckTopLevelCodeDecl(TopLevelCodeDecl *TLCD);
 
   void processREPLTopLevel(SourceFile &SF, TopLevelContext &TLC,
@@ -1090,7 +1095,9 @@ public:
   void typeCheckDecl(Decl *D);
 
   void checkDeclAttributesEarly(Decl *D);
+  void addImplicitDynamicAttribute(Decl *D);
   void checkDeclAttributes(Decl *D);
+  void checkDynamicReplacementAttribute(ValueDecl *D);
   void checkTypeModifyingDeclAttributes(VarDecl *var);
 
   void checkReferenceOwnershipAttr(VarDecl *D, ReferenceOwnershipAttr *attr);
@@ -1391,15 +1398,6 @@ public:
 
   bool typeCheckCompletionSequence(Expr *&expr, DeclContext *DC);
 
-  /// \brief Type check the given expression assuming that its children
-  /// have already been fully type-checked.
-  ///
-  /// \param expr The expression to type-check, which will be modified in
-  /// place.
-  ///
-  /// \returns true if an error occurred, false otherwise.
-  bool typeCheckExpressionShallow(Expr *&expr, DeclContext *dc);
-
   /// Check the key-path expression.
   ///
   /// Returns the type of the last component of the key-path.
@@ -1692,7 +1690,7 @@ public:
                     ProtocolDecl *protocol,
                     ProtocolConformanceRef conformance,
                     DeclName name,
-                    MutableArrayRef<Expr *> arguments,
+                    ArrayRef<Expr *> arguments,
                     Diag<> brokenProtocolDiag);
 
   /// \brief Determine whether the given type contains the given protocol.
@@ -1908,6 +1906,11 @@ public:
   Expr *buildRefExpr(ArrayRef<ValueDecl *> Decls, DeclContext *UseDC,
                      DeclNameLoc NameLoc, bool Implicit,
                      FunctionRefKind functionRefKind);
+
+  /// Build implicit autoclosure expression wrapping a given expression.
+  /// Given expression represents computed result of the closure.
+  Expr *buildAutoClosureExpr(DeclContext *DC, Expr *expr,
+                             FunctionType *closureType);
   /// @}
 
   /// \brief Retrieve a specific, known protocol.
@@ -2163,6 +2166,13 @@ public:
   /// The unescaped message to display to the user.
   const StringRef Message;
 };
+
+/// Returns true if a method is an valid implementation of a @dynamicCallable
+/// attribute requirement. The method is given to be defined as one of the
+/// following: `dynamicallyCall(withArguments:)` or
+/// `dynamicallyCall(withKeywordArguments:)`.
+bool isValidDynamicCallableMethod(FuncDecl *funcDecl, DeclContext *DC,
+                                  TypeChecker &TC, bool hasKeywordArguments);
 
 /// Given a subscript defined as "subscript(dynamicMember:)->T", return true if
 /// it is an acceptable implementation of the @dynamicMemberLookup attribute's

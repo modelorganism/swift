@@ -486,6 +486,16 @@ private:
     case Node::Kind::AssociatedTypeGenericParamRef:
     case Node::Kind::ExtensionDescriptor:
     case Node::Kind::AnonymousContext:
+    case Node::Kind::AnyProtocolConformanceList:
+    case Node::Kind::ConcreteProtocolConformance:
+    case Node::Kind::DependentAssociatedConformance:
+    case Node::Kind::DependentProtocolConformanceAssociated:
+    case Node::Kind::DependentProtocolConformanceInherited:
+    case Node::Kind::DependentProtocolConformanceRoot:
+    case Node::Kind::ProtocolConformanceRef:
+    case Node::Kind::DynamicallyReplaceableFunctionKey:
+    case Node::Kind::DynamicallyReplaceableFunctionImpl:
+    case Node::Kind::DynamicallyReplaceableFunctionVar:
       return false;
     }
     printer_unreachable("bad node kind");
@@ -1514,6 +1524,21 @@ NodePointer NodePrinter::print(NodePointer Node, bool asPrefixContext) {
     Printer << "type symbolic reference 0x";
     Printer.writeHex(Node->getIndex());
     return nullptr;
+  case Node::Kind::DynamicallyReplaceableFunctionKey:
+    if (!Options.ShortenThunk) {
+      Printer << "dynamically replaceable key for ";
+    }
+    return nullptr;
+  case Node::Kind::DynamicallyReplaceableFunctionImpl:
+    if (!Options.ShortenThunk) {
+      Printer << "dynamically replaceable thunk for ";
+    }
+    return nullptr;
+  case Node::Kind::DynamicallyReplaceableFunctionVar:
+    if (!Options.ShortenThunk) {
+      Printer << "dynamically replaceable variable for ";
+    }
+    return nullptr;
   case Node::Kind::ProtocolSymbolicReference:
     Printer << "protocol symbolic reference 0x";
     Printer.writeHex(Node->getIndex());
@@ -2084,6 +2109,39 @@ NodePointer NodePrinter::print(NodePointer Node, bool asPrefixContext) {
     return nullptr;
   case Node::Kind::AssociatedTypeGenericParamRef:
     Printer << "generic parameter reference for associated type ";
+    printChildren(Node);
+    return nullptr;
+  case Node::Kind::AnyProtocolConformanceList:
+    printChildren(Node);
+    return nullptr;
+  case Node::Kind::ConcreteProtocolConformance:
+    Printer << "concrete protocol conformance ";
+    if (Node->hasIndex())
+      Printer << "#" << Node->getIndex() << " ";
+    printChildren(Node);
+    return nullptr;
+  case Node::Kind::DependentAssociatedConformance:
+    Printer << "dependent associated conformance ";
+    printChildren(Node);
+    return nullptr;
+  case Node::Kind::DependentProtocolConformanceAssociated:
+    Printer << "dependent associated protocol conformance ";
+    if (Node->hasIndex())
+      Printer << "#" << Node->getIndex() << " ";
+    printChildren(Node);
+    return nullptr;
+  case Node::Kind::DependentProtocolConformanceInherited:
+    Printer << "dependent inherited protocol conformance ";
+    if (Node->hasIndex())
+      Printer << "#" << Node->getIndex() << " ";
+    printChildren(Node);
+    return nullptr;
+  case Node::Kind::DependentProtocolConformanceRoot:
+    Printer << "dependent root protocol conformance #" << Node->getIndex()
+      << " ";
+    printChildren(Node);
+    return nullptr;
+  case Node::Kind::ProtocolConformanceRef:
     printChildren(Node);
     return nullptr;
   }
