@@ -34,16 +34,17 @@ namespace swift {
   class TypeChecker;
   class ValueDecl;
 
-/// \brief Emit diagnostics for syntactic restrictions on a given expression.
+/// Emit diagnostics for syntactic restrictions on a given expression.
 void performSyntacticExprDiagnostics(TypeChecker &TC, const Expr *E,
                                      const DeclContext *DC,
                                      bool isExprStmt);
 
-/// \brief Emit diagnostics for a given statement.
+/// Emit diagnostics for a given statement.
 void performStmtDiagnostics(TypeChecker &TC, const Stmt *S);
 
 void performAbstractFuncDeclDiagnostics(TypeChecker &TC,
-                                        AbstractFunctionDecl *AFD);
+                                        AbstractFunctionDecl *AFD,
+                                        BraceStmt *body);
 
 /// Perform diagnostics on the top level code declaration.
 void performTopLevelDeclDiagnostics(TypeChecker &TC, TopLevelCodeDecl *TLCD);
@@ -65,7 +66,7 @@ void fixItAccess(InFlightDiagnostic &diag,
 ///
 /// \returns true if the issue was diagnosed
 bool diagnoseArgumentLabelError(ASTContext &ctx,
-                                const Expr *expr,
+                                Expr *expr,
                                 ArrayRef<Identifier> newNames,
                                 bool isSubscript,
                                 InFlightDiagnostic *existingDiag = nullptr);

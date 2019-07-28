@@ -58,17 +58,7 @@ using namespace swift;
 OBJC_EXPORT __attribute__((__weak_import__))
 const uintptr_t objc_debug_isa_class_mask;
 
-static uintptr_t computeISAMask() {
-  // The versions of the Objective-C runtime which use non-pointer
-  // ISAs also export this symbol.
-  if (auto runtimeSymbol = &objc_debug_isa_class_mask)
-    return *runtimeSymbol;
-  return ~uintptr_t(0);
-}
-
-SWIFT_ALLOWED_RUNTIME_GLOBAL_CTOR_BEGIN
-uintptr_t swift::swift_isaMask = computeISAMask();
-SWIFT_ALLOWED_RUNTIME_GLOBAL_CTOR_END
+uintptr_t swift::swift_isaMask = SWIFT_ISA_MASK;
 #endif
 
 const ClassMetadata *swift::_swift_getClass(const void *object) {
@@ -82,27 +72,9 @@ const ClassMetadata *swift::_swift_getClass(const void *object) {
 #endif
 }
 
-bool isObjCPinned(HeapObject *obj) {
-  #if SWIFT_OBJC_INTEROP
-    /* future: implement checking the relevant objc runtime bits */
-    return true;
-  #else
-    return false;
-  #endif
-}
-
-// returns non-null if realloc was successful
-SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_SPI
-HeapObject *swift::_swift_reallocObject(HeapObject *obj, size_t size) {
- if (isObjCPinned(obj) || obj->refCounts.hasSideTable()) {
-   return nullptr;
- }
- return (HeapObject *)realloc(obj, size);
-}
-
 #if SWIFT_OBJC_INTEROP
 
-/// \brief Replacement for ObjC object_isClass(), which is unavailable on
+/// Replacement for ObjC object_isClass(), which is unavailable on
 /// deployment targets macOS 10.9 and iOS 7.
 static bool objcObjectIsClass(id object) {
   // same as object_isClass(object)
@@ -114,7 +86,7 @@ static Class _swift_getObjCClassOfAllocated(const void *object) {
   return class_const_cast(_swift_getClassOfAllocated(object));
 }
 
-/// \brief Fetch the ObjC class object associated with the formal dynamic
+/// Fetch the ObjC class object associated with the formal dynamic
 /// type of the given (possibly Objective-C) object.  The formal
 /// dynamic type ignores dynamic subclasses such as those introduced
 /// by KVO.
@@ -144,7 +116,7 @@ const ClassMetadata *swift::swift_getObjCClassFromObject(HeapObject *object) {
 }
 #endif
 
-/// \brief Fetch the type metadata associated with the formal dynamic
+/// Fetch the type metadata associated with the formal dynamic
 /// type of the given (possibly Objective-C) object.  The formal
 /// dynamic type ignores dynamic subclasses such as those introduced
 /// by KVO.
@@ -196,6 +168,11 @@ static SwiftObject *_allocHelper(Class cls) {
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_API
+Class _swift_classOfObjCHeapObject(OpaqueValue *value) {
+  return _swift_getObjCClassOfAllocated(value);
+}
+
+SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_API
 NSString *swift_stdlib_getDescription(OpaqueValue *value,
                                       const Metadata *type);
 
@@ -217,7 +194,18 @@ static NSString *_getClassDescription(Class cls) {
 
 
 @implementation SwiftObject
-+ (void)initialize {}
++ (void)initialize {
+#if SWIFT_HAS_ISA_MASKING && !NDEBUG
+  // Older OSes may not have this variable, or it may not match. This code only
+  // runs on older OSes in certain testing scenarios, so that doesn't matter.
+  // Only perform the check on newer OSes where the value should definitely
+  // match.
+  if (!_swift_isBackDeploying()) {
+    assert(&objc_debug_isa_class_mask);
+    assert(objc_debug_isa_class_mask == SWIFT_ISA_MASK);
+  }
+#endif
+}
 
 + (instancetype)allocWithZone:(struct _NSZone *)zone {
   assert(zone == nullptr);
@@ -893,6 +881,9 @@ static bool isObjCForUnownedReference(void *value) {
 
 UnownedReference *swift::swift_unknownObjectUnownedInit(UnownedReference *dest,
                                                         void *value) {
+  // Note that LLDB also needs to know about the memory layout of unowned
+  // references. The implementation here needs to be kept in sync with
+  // lldb_private::SwiftLanguagueRuntime.
   if (!value) {
     dest->Value = nullptr;
   } else if (isObjCForUnownedReference(value)) {
@@ -1116,7 +1107,9 @@ swift_dynamicCastObjCClassImpl(const void *object,
 
 static const void *
 swift_dynamicCastObjCClassUnconditionalImpl(const void *object,
-                                            const ClassMetadata *targetType) {
+                                            const ClassMetadata *targetType,
+                                            const char *filename,
+                                            unsigned line, unsigned column) {
   // FIXME: We need to decide if this is really how we want to treat 'nil'.
   if (object == nullptr)
     return nullptr;
@@ -1140,7 +1133,9 @@ swift_dynamicCastForeignClassImpl(const void *object,
 static const void *
 swift_dynamicCastForeignClassUnconditionalImpl(
          const void *object,
-         const ForeignClassMetadata *targetType) {
+         const ForeignClassMetadata *targetType,
+         const char *filename,
+         unsigned line, unsigned column) {
   // FIXME: Actual compare CFTypeIDs, once they are available in the metadata.
   return object;
 }
@@ -1160,9 +1155,11 @@ bool swift::classConformsToObjCProtocol(const void *theClass,
 
 SWIFT_RUNTIME_EXPORT
 const Metadata *swift_dynamicCastTypeToObjCProtocolUnconditional(
-                                                 const Metadata *type,
-                                                 size_t numProtocols,
-                                                 Protocol * const *protocols) {
+                                               const Metadata *type,
+                                               size_t numProtocols,
+                                               Protocol * const *protocols,
+                                               const char *filename,
+                                               unsigned line, unsigned column) {
   Class classObject;
 
   switch (type->getKind()) {
@@ -1233,7 +1230,9 @@ const Metadata *swift_dynamicCastTypeToObjCProtocolConditional(
 SWIFT_RUNTIME_EXPORT
 id swift_dynamicCastObjCProtocolUnconditional(id object,
                                               size_t numProtocols,
-                                              Protocol * const *protocols) {
+                                              Protocol * const *protocols,
+                                              const char *filename,
+                                              unsigned line, unsigned column) {
   for (size_t i = 0; i < numProtocols; ++i) {
     if (![object conformsToProtocol:protocols[i]]) {
       Class sourceType = object_getClass(object);
@@ -1276,7 +1275,11 @@ Class swift::swift_getInitializedObjCClass(Class c) {
   // Used when we have class metadata and we want to ensure a class has been
   // initialized by the Objective-C runtime. We need to do this because the
   // class "c" might be valid metadata, but it hasn't been initialized yet.
-  return [c class];
+  // Send a message that's likely not to be overridden to minimize potential
+  // side effects. Ignore the return value in case it is overridden to
+  // return something different. See SR-10463 for an example.
+  [c self];
+  return c;
 }
 
 static const ClassMetadata *
@@ -1289,7 +1292,9 @@ swift_dynamicCastObjCClassMetatypeImpl(const ClassMetadata *source,
 
 static const ClassMetadata *
 swift_dynamicCastObjCClassMetatypeUnconditionalImpl(const ClassMetadata *source,
-                                                    const ClassMetadata *dest) {
+                                                    const ClassMetadata *dest,
+                                                    const char *filename,
+                                                    unsigned line, unsigned column) {
   if ([class_const_cast(source) isSubclassOfClass:class_const_cast(dest)])
     return source;
 
@@ -1309,7 +1314,9 @@ swift_dynamicCastForeignClassMetatypeImpl(const ClassMetadata *sourceType,
 static const ClassMetadata *
 swift_dynamicCastForeignClassMetatypeUnconditionalImpl(
   const ClassMetadata *sourceType,
-  const ClassMetadata *targetType)
+  const ClassMetadata *targetType,
+  const char *filename,
+  unsigned line, unsigned column)
 {
   // FIXME: Actually compare CFTypeIDs, once they arae available in
   // the metadata.

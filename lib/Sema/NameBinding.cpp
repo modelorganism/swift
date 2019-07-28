@@ -220,28 +220,43 @@ void NameBinder::addImport(
       assert(!M->getFiles().empty() &&
              isa<ClangModuleUnit>(M->getFiles().front()));
       topLevelModule = M;
+    } else if (topLevelModule == SF.getParentModule()) {
+      // This can happen when compiling a mixed-source framework (or overlay)
+      // that imports a submodule of its C part.
+      topLevelModule = nullptr;
     }
   }
 
   auto *testableAttr = ID->getAttrs().getAttribute<TestableAttr>();
-  if (testableAttr && !topLevelModule->isTestingEnabled() &&
+  if (testableAttr && topLevelModule &&
+      !topLevelModule->isTestingEnabled() &&
+      !topLevelModule->isNonSwiftModule() &&
       Context.LangOpts.EnableTestableAttrRequiresTestableModule) {
     diagnose(ID->getModulePath().front().second, diag::module_not_testable,
-             topLevelModule->getName());
+             ID->getModulePath().front().first);
     testableAttr->setInvalid();
   }
 
   auto *privateImportAttr = ID->getAttrs().getAttribute<PrivateImportAttr>();
   StringRef privateImportFileName;
   if (privateImportAttr) {
-    if (!topLevelModule->arePrivateImportsEnabled()) {
+    if (!topLevelModule || !topLevelModule->arePrivateImportsEnabled()) {
       diagnose(ID->getModulePath().front().second,
                diag::module_not_compiled_for_private_import,
-               topLevelModule->getName());
+               ID->getModulePath().front().first);
       privateImportAttr->setInvalid();
     } else {
       privateImportFileName = privateImportAttr->getSourceFile();
     }
+  }
+
+  if (SF.getParentModule()->isResilient() && topLevelModule &&
+      !topLevelModule->isResilient() &&
+      !topLevelModule->isNonSwiftModule() &&
+      !ID->getAttrs().hasAttribute<ImplementationOnlyAttr>()) {
+    diagnose(ID->getModulePath().front().second,
+             diag::module_not_compiled_with_library_evolution,
+             topLevelModule->getName(), SF.getParentModule()->getName());
   }
 
   ImportOptions options;
@@ -252,10 +267,22 @@ void NameBinder::addImport(
   if (privateImportAttr)
     options |= SourceFile::ImportFlags::PrivateImport;
 
+  auto *implementationOnlyAttr =
+      ID->getAttrs().getAttribute<ImplementationOnlyAttr>();
+  if (implementationOnlyAttr) {
+    if (options.contains(SourceFile::ImportFlags::Exported)) {
+      diagnose(ID, diag::import_implementation_cannot_be_exported,
+               topLevelModule->getName())
+        .fixItRemove(implementationOnlyAttr->getRangeWithAt());
+    } else {
+      options |= SourceFile::ImportFlags::ImplementationOnly;
+    }
+  }
+
   imports.push_back(SourceFile::ImportedModuleDesc(
       {ID->getDeclPath(), M}, options, privateImportFileName));
 
-  if (topLevelModule != M)
+  if (topLevelModule && topLevelModule != M)
     imports.push_back(SourceFile::ImportedModuleDesc(
         {ID->getDeclPath(), topLevelModule}, options, privateImportFileName));
 
@@ -304,7 +331,7 @@ void NameBinder::addImport(
         emittedDiag.emplace(diagnose(ID,
             diag::imported_decl_is_wrong_kind_typealias,
             typealias->getDescriptiveKind(),
-            NameAliasType::get(typealias, Type(), SubstitutionMap(),
+            TypeAliasType::get(typealias, Type(), SubstitutionMap(),
                                 typealias->getUnderlyingTypeLoc().getType()),
             getImportKindString(ID->getImportKind())));
       } else {

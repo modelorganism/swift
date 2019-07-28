@@ -168,13 +168,7 @@ public struct MetatypeStruct {
   public let abstractMetatype: MetadataHolder<BasicStruct.Type, BasicStruct>
 }
 
-// We don't allow stored properties to have uninhabited types now, but make a
-// wrapper over one to continue testing this 
 public enum EmptyEnum {}
-
-public struct EmptyEnumWrapper<T> {
-  public var value: T
-}
 
 public enum NoPayloadEnum {
   case A
@@ -224,7 +218,7 @@ public enum MultiPayloadGenericDynamic<T, U> {
 }
 
 public struct EnumStruct {
-  public let empty: EmptyEnumWrapper<EmptyEnum>
+  public let empty: EmptyEnum
   public let noPayload: NoPayloadEnum
   public let sillyNoPayload: SillyNoPayloadEnum
   public let singleton: SingletonEnum
@@ -256,4 +250,25 @@ public enum MultiPayloadGenericNotBitwiseTakable<T> {
 public struct EnumStructWithOwnership {
   public let multiPayloadConcrete: MultiPayloadConcreteNotBitwiseTakable
   public let multiPayloadGeneric: MultiPayloadGenericNotBitwiseTakable<Int8>
+}
+
+public protocol AssocType {
+  associatedtype A
+  func foo() -> A
+}
+
+public struct OpaqueWitness: AssocType {
+  public func foo() -> some Any {
+    return 0 as Int32
+  }
+}
+
+public struct GenericOnAssocType<T: AssocType> {
+  var x: T.A
+  var y: T.A
+}
+
+public struct RefersToOtherAssocType {
+  var x: OpaqueWitness.A
+  var y: OpaqueWitness.A
 }

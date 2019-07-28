@@ -1036,8 +1036,8 @@ bb0(%0 : $Builtin.RawPointer, %1 : $Builtin.Word):
 // CHECK: sil public_external [transparent] [serialized] @cond_fail_test : $@convention(thin) (Builtin.Int1) -> () {
 sil [transparent] [serialized] @cond_fail_test : $@convention(thin) (Builtin.Int1) -> () {
 entry(%0 : $Builtin.Int1):
-  // CHECK: cond_fail %0 : $Builtin.Int1
-  cond_fail %0 : $Builtin.Int1
+  // CHECK: cond_fail %0 : $Builtin.Int1, "message"
+  cond_fail %0 : $Builtin.Int1, "message"
   %1 = tuple ()
   return %1 : $()
 }
@@ -1223,8 +1223,8 @@ sil [transparent] [serialized] [thunk] @a_regular_thunk : $@convention(thin) () 
 }
 
 public class WeakUnownedTest {
-  @sil_stored public unowned var unownedVal: @sil_unowned AnyObject { get set }
-  @sil_stored public weak var weakVal: @sil_weak AnyObject? { get set }
+  @_hasStorage public unowned var unownedVal: @sil_unowned AnyObject { get set }
+  @_hasStorage public weak var weakVal: @sil_weak AnyObject? { get set }
   public init(protoVal: AnyObject)
   deinit
 }
@@ -1249,7 +1249,7 @@ bb0(%0 : $WeakUnownedTest, %1 : $AnyObject):
 
 
 class A {
-  @sil_stored var property: Any { get set }
+  @_hasStorage var property: Any { get set }
   deinit
   init()
 }

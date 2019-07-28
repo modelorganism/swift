@@ -33,7 +33,6 @@ enum LocalDiagID : uint32_t {
 static StringRef getCategoryName(uint32_t ID) {
   switch(ID) {
   case LocalDiagID::removed_decl:
-  case LocalDiagID::removed_setter:
     return "/* Removed Decls */";
   case LocalDiagID::moved_decl:
   case LocalDiagID::decl_kind_changed:
@@ -44,6 +43,7 @@ static StringRef getCategoryName(uint32_t ID) {
   case LocalDiagID::decl_new_attr:
   case LocalDiagID::var_let_changed:
   case LocalDiagID::func_self_access_change:
+  case LocalDiagID::new_decl_without_intro:
     return "/* Decl Attribute changes */";
   case LocalDiagID::default_arg_removed:
   case LocalDiagID::decl_type_change:
@@ -63,9 +63,11 @@ static StringRef getCategoryName(uint32_t ID) {
   case LocalDiagID::conformance_added:
   case LocalDiagID::conformance_removed:
   case LocalDiagID::optional_req_changed:
+  case LocalDiagID::existing_conformance_added:
     return "/* Protocol Conformance Change */";
   case LocalDiagID::default_associated_type_removed:
   case LocalDiagID::protocol_req_added:
+  case LocalDiagID::decl_new_witness_table_entry:
     return "/* Protocol Requirement Change */";
   case LocalDiagID::super_class_removed:
   case LocalDiagID::super_class_changed:
@@ -89,16 +91,16 @@ ModuleDifferDiagsConsumer::ModuleDifferDiagsConsumer(bool DiagnoseModuleDiff,
 #include "swift/AST/DiagnosticsModuleDiffer.def"
 }
 
-void swift::ide::api::
-ModuleDifferDiagsConsumer::handleDiagnostic(SourceManager &SM, SourceLoc Loc,
-                        DiagnosticKind Kind,
-                        StringRef FormatString,
-                        ArrayRef<DiagnosticArgument> FormatArgs,
-                        const DiagnosticInfo &Info) {
+void swift::ide::api::ModuleDifferDiagsConsumer::handleDiagnostic(
+    SourceManager &SM, SourceLoc Loc, DiagnosticKind Kind,
+    StringRef FormatString, ArrayRef<DiagnosticArgument> FormatArgs,
+    const DiagnosticInfo &Info,
+    const SourceLoc bufferIndirectlyCausingDiagnostic) {
   auto Category = getCategoryName((uint32_t)Info.ID);
   if (Category.empty()) {
-    PrintingDiagnosticConsumer::handleDiagnostic(SM, Loc, Kind, FormatString,
-      FormatArgs, Info);
+    PrintingDiagnosticConsumer::handleDiagnostic(
+        SM, Loc, Kind, FormatString, FormatArgs, Info,
+        bufferIndirectlyCausingDiagnostic);
     return;
   }
   if (!DiagnoseModuleDiff)

@@ -882,7 +882,7 @@ protocol ProtocolWillSetDidSet4 {
   var a: Int { didSet willSet } // expected-error {{property in protocol must have explicit { get } or { get set } specifier}} {{14-32={ get <#set#> \}}} expected-error 2 {{expected get or set in a protocol property}}
 }
 protocol ProtocolWillSetDidSet5 {
-  let a: Int { didSet willSet }  // expected-error {{property in protocol must have explicit { get } or { get set } specifier}} {{14-32={ get <#set#> \}}} {{none}} expected-error 2 {{expected get or set in a protocol property}} expected-error {{'let' declarations cannot be computed properties}} {{3-6=var}}
+  let a: Int { didSet willSet }  // expected-error {{immutable property requirement must be declared as 'var' with a '{ get }' specifier}} {{3-6=var}} {{13-13= { get \}}} {{none}} expected-error 2 {{expected get or set in a protocol property}} expected-error {{'let' declarations cannot be computed properties}} {{3-6=var}}
 }
 
 var globalDidsetWillSet: Int {  // expected-error {{non-member observing properties require an initializer}}
@@ -1268,24 +1268,67 @@ class WeakFixItTest {
   weak var bar : WFI_P1 & WFI_P2
 }
 
-// SR-8811
-// Stored properties cannot have uninhabited types
+// SR-8811 (Warning)
 
-struct SR8811 {
-  var x: Never // expected-error {{stored property 'x' cannot have enum type 'Never' with no cases}}
-  
-  var y: (Int, Never, Bool) // expected-error {{stored property 'y' cannot have tuple type '(Int, Never, Bool)' containing enum with no cases}}
+let sr8811a = fatalError() // expected-warning {{constant 'sr8811a' inferred to have type 'Never', which is an enum with no cases}} expected-note {{add an explicit type annotation to silence this warning}}
+
+let sr8811b: Never = fatalError() // Ok
+
+let sr8811c = (16, fatalError()) // expected-warning {{constant 'sr8811c' inferred to have type '(Int, Never)', which contains an enum with no cases}} expected-note {{add an explicit type annotation to silence this warning}}
+
+let sr8811d: (Int, Never) = (16, fatalError()) // Ok
+
+// SR-10995
+
+class SR_10995 {
+  func makeDoubleOptionalNever() -> Never?? {
+    return nil
+  }
+
+  func makeSingleOptionalNever() -> Never? {
+    return nil
+  }
+
+  func sr_10995_foo() {
+    let doubleOptionalNever = makeDoubleOptionalNever() // expected-warning {{constant 'doubleOptionalNever' inferred to have type 'Never??', which may be unexpected}} 
+    // expected-note@-1 {{add an explicit type annotation to silence this warning}} 
+    // expected-warning@-2 {{initialization of immutable value 'doubleOptionalNever' was never used; consider replacing with assignment to '_' or removing it}}
+    let singleOptionalNever = makeSingleOptionalNever() // expected-warning {{constant 'singleOptionalNever' inferred to have type 'Never?', which may be unexpected}} 
+    // expected-note@-1 {{add an explicit type annotation to silence this warning}} 
+    // expected-warning@-2 {{initialization of immutable value 'singleOptionalNever' was never used; consider replacing with assignment to '_' or removing it}}
+  }
 }
 
-let sr8811x: Never // expected-error {{constant 'sr8811x' cannot have enum type 'Never' with no cases}}
+// SR-9267
 
-var sr8811y: (Int, Never) // expected-error {{variable 'sr8811y' cannot have tuple type '(Int, Never)' containing enum with no cases}}
-
-// Ok
-var sr8811z: Never {
-  return fatalError()
+class SR_9267 {}
+extension SR_9267 {
+  var foo: String = { // expected-error {{extensions must not contain stored properties}} // expected-error {{function produces expected type 'String'; did you mean to call it with '()'?}} // expected-note {{Remove '=' to make 'foo' a computed property}}{{19-21=}}
+    return "Hello"
+  }
 }
 
-enum SR8811EmptyGenericEnum<A> {}
+enum SR_9267_E {
+  var SR_9267_prop: String = { // expected-error {{enums must not contain stored properties}} // expected-error {{function produces expected type 'String'; did you mean to call it with '()'?}} // expected-note {{Remove '=' to make 'SR_9267_prop' a computed property}}{{28-30=}}
+    return "Hello"
+  }
+}
 
-let sr8811z: SR8811EmptyGenericEnum<Int> // expected-error {{constant 'sr8811z' cannot have enum type 'SR8811EmptyGenericEnum<Int>' with no cases}}
+var SR_9267_prop_1: Int = { // expected-error {{function produces expected type 'Int'; did you mean to call it with '()'?}} // expected-note {{Remove '=' to make 'SR_9267_prop_1' a computed property}}{{25-27=}}
+  return 0
+}
+
+class SR_9267_C {
+  var SR_9267_prop_2: String = { // expected-error {{function produces expected type 'String'; did you mean to call it with '()'?}} // expected-note {{Remove '=' to make 'SR_9267_prop_2' a computed property}}{{30-32=}}
+    return "Hello"
+  }
+}
+
+class SR_9267_C2 {
+  let SR_9267_prop_3: Int = { return 0 } // expected-error {{function produces expected type 'Int'; did you mean to call it with '()'?}} // expected-note {{Remove '=' to make 'SR_9267_prop_3' a computed property}}{{3-6=var}}{{27-29=}}
+}
+
+class LazyPropInClass {
+  lazy var foo: Int = { return 0 } // expected-error {{function produces expected type 'Int'; did you mean to call it with '()'?}}
+  // expected-note@-1 {{Remove '=' to make 'foo' a computed property}}{{21-23=}}{{3-8=}}
+}

@@ -10,9 +10,26 @@ ATTRIBUTE_NODES = [
     Node('NonEmptyTokenList', kind='SyntaxCollection',
          element='Token', omit_when_empty=True),
 
-    # attribute -> '@' identifier '('? 
-    #              ( identifier 
-    #                | string-literal 
+    Node('CustomAttribute', kind='Syntax',
+         description='''
+         A custom `@` attribute.
+         ''',
+         children=[
+             Child('AtSignToken', kind='AtSignToken',
+                   description='The `@` sign.'),
+             Child('AttributeName', kind='Type', classification='Attribute',
+                   description='The name of the attribute.'),
+             Child('LeftParen', kind='LeftParenToken',
+                   is_optional=True),
+             Child('ArgumentList', kind='FunctionCallArgumentList',
+                   collection_element_name='Argument', is_optional=True),
+             Child('RightParen', kind='RightParenToken',
+                   is_optional=True),
+         ]),
+
+    # attribute -> '@' identifier '('?
+    #              ( identifier
+    #                | string-literal
     #                | integer-literal
     #                | availability-spec-list
     #                | specialize-attr-spec-list
@@ -24,7 +41,7 @@ ATTRIBUTE_NODES = [
          An `@` attribute.
          ''',
          children=[
-             Child('AtSignToken', kind='AtSignToken', 
+             Child('AtSignToken', kind='AtSignToken',
                    description='The `@` sign.'),
              Child('AttributeName', kind='Token', classification='Attribute',
                    description='The name of the attribute.'),
@@ -38,10 +55,10 @@ ATTRIBUTE_NODES = [
                        Child('String', kind='StringLiteralToken'),
                        Child('Integer', kind='IntegerLiteralToken'),
                        Child('Availability', kind='AvailabilitySpecList'),
-                       Child('SpecializeArguments', 
+                       Child('SpecializeArguments',
                              kind='SpecializeAttributeSpecList'),
                        Child('ObjCName', kind='ObjCSelector'),
-                       Child('ImplementsArguments', 
+                       Child('ImplementsArguments',
                              kind='ImplementsAttributeArguments'),
                        Child('NamedAttributeString',
                              kind='NamedAttributeStringArgument'),
@@ -56,23 +73,28 @@ ATTRIBUTE_NODES = [
                    '''),
              # TokenList to gather remaining tokens of invalid attributes
              # FIXME: Remove this recovery option entirely
-             Child('TokenList', kind='TokenList', is_optional=True),
+             Child('TokenList', kind='TokenList',
+                   collection_element_name='Token', is_optional=True),
          ]),
 
     # attribute-list -> attribute attribute-list?
     Node('AttributeList', kind='SyntaxCollection',
-         element='Attribute'),
+         element='Syntax', element_name='Attribute',
+         element_choices=[
+             'Attribute',
+             'CustomAttribute',
+         ]),
 
     # The argument of '@_specialize(...)'
-    # specialize-attr-spec-list -> labeled-specialize-entry 
+    # specialize-attr-spec-list -> labeled-specialize-entry
     #                                  specialize-spec-attr-list?
-    #                            | generic-where-clause 
+    #                            | generic-where-clause
     #                                  specialize-spec-attr-list?
     Node('SpecializeAttributeSpecList', kind='SyntaxCollection',
          description='''
          A collection of arguments for the `@_specialize` attribute
          ''',
-         element='Syntax',
+         element='Syntax', element_name='SpecializeAttribute',
          element_choices=[
              'LabeledSpecializeEntry',
              'GenericWhereClause',
@@ -87,11 +109,11 @@ ATTRIBUTE_NODES = [
          ''',
          traits=['WithTrailingComma'],
          children=[
-             Child('Label', kind='IdentifierToken', 
+             Child('Label', kind='IdentifierToken',
                    description='The label of the argument'),
-             Child('Colon', kind='ColonToken', 
+             Child('Colon', kind='ColonToken',
                    description='The colon separating the label and the value'),
-             Child('Value', kind='Token', 
+             Child('Value', kind='Token',
                    description='The value for this argument'),
              Child('TrailingComma', kind='CommaToken',
                    is_optional=True, description='''
@@ -131,7 +153,7 @@ ATTRIBUTE_NODES = [
                '''),
          ]),
     # The argument of '@_implements(...)'
-    # implements-attr-arguments -> simple-type-identifier ',' 
+    # implements-attr-arguments -> simple-type-identifier ','
     #                              (identifier | operator) decl-name-arguments
     Node('ImplementsAttributeArguments', kind='Syntax',
          description='''
@@ -143,7 +165,7 @@ ATTRIBUTE_NODES = [
                    The type for which the method with this attribute \
                    implements a requirement.
                    '''),
-             Child('Comma', kind='CommaToken', 
+             Child('Comma', kind='CommaToken',
                    description='''
                    The comma separating the type and method name
                    '''),
@@ -154,7 +176,7 @@ ATTRIBUTE_NODES = [
                        Child('Identifier', kind='IdentifierToken'),
                        Child('Operator', kind='PrefixOperatorToken'),
                    ]),
-             Child('DeclNameArguments', kind='DeclNameArguments', 
+             Child('DeclNameArguments', kind='DeclNameArguments',
                    is_optional=True, description='''
                    The argument labels of the protocol\'s requirement if it \
                    is a function requirement.

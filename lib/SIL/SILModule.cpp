@@ -144,20 +144,6 @@ void SILModule::deallocateInst(SILInstruction *I) {
 }
 
 SILWitnessTable *
-SILModule::createWitnessTableDeclaration(ProtocolConformance *C,
-                                         SILLinkage linkage) {
-  // If we are passed in a null conformance (a valid value), just return nullptr
-  // since we cannot map a witness table to it.
-  if (!C)
-    return nullptr;
-
-  // Extract the base NormalProtocolConformance.
-  NormalProtocolConformance *NormalC = C->getRootNormalConformance();
-
-  return SILWitnessTable::create(*this, linkage, NormalC);
-}
-
-SILWitnessTable *
 SILModule::lookUpWitnessTable(ProtocolConformanceRef C,
                               bool deserializeLazily) {
   // If we have an abstract conformance passed in (a legal value), just return
@@ -173,9 +159,11 @@ SILModule::lookUpWitnessTable(const ProtocolConformance *C,
                               bool deserializeLazily) {
   assert(C && "null conformance passed to lookUpWitnessTable");
 
-  const NormalProtocolConformance *NormalC = C->getRootNormalConformance();
+  SILWitnessTable *wtable;
+
+  auto rootC = C->getRootConformance();
   // Attempt to lookup the witness table from the table.
-  auto found = WitnessTableMap.find(NormalC);
+  auto found = WitnessTableMap.find(rootC);
   if (found == WitnessTableMap.end()) {
 #ifndef NDEBUG
     // Make sure that all witness tables are in the witness table lookup
@@ -186,20 +174,28 @@ SILModule::lookUpWitnessTable(const ProtocolConformance *C,
     // is the potential for a conformance without a witness table to be passed
     // to this function.
     for (SILWitnessTable &WT : witnessTables)
-      assert(WT.getConformance() != NormalC &&
+      assert(WT.getConformance() != rootC &&
              "Found witness table that is not"
              " in the witness table lookup cache.");
 #endif
-    return nullptr;
+
+    // If we don't have a witness table and we're not going to try
+    // deserializing it, do not create a declaration.
+    if (!deserializeLazily)
+      return nullptr;
+
+    auto linkage = getLinkageForProtocolConformance(rootC, NotForDefinition);
+    wtable = SILWitnessTable::create(*this, linkage,
+                                 const_cast<RootProtocolConformance *>(rootC));
+  } else {
+    wtable = found->second;
+    assert(wtable != nullptr && "Should never map a conformance to a null witness"
+                            " table.");
+
+    // If we have a definition, return it.
+    if (wtable->isDefinition())
+      return wtable;
   }
-
-  SILWitnessTable *wtable = found->second;
-  assert(wtable != nullptr && "Should never map a conformance to a null witness"
-                          " table.");
-
-  // If we have a definition, return it.
-  if (wtable->isDefinition())
-    return wtable;
 
   // If the module is at or past the Lowered stage, then we can't do any
   // further deserialization, since pre-IRGen SIL lowering changes the types
@@ -260,7 +256,7 @@ SILModule::createDefaultWitnessTableDeclaration(const ProtocolDecl *Protocol,
 }
 
 void SILModule::deleteWitnessTable(SILWitnessTable *Wt) {
-  NormalProtocolConformance *Conf = Wt->getConformance();
+  auto Conf = Wt->getConformance();
   assert(lookUpWitnessTable(Conf, false) == Wt);
   WitnessTableMap.erase(Conf);
   witnessTables.erase(Wt);
@@ -276,7 +272,7 @@ const IntrinsicInfo &SILModule::getIntrinsicInfo(Identifier ID) {
 
   // Otherwise, lookup the ID and Type and store them in the map.
   StringRef NameRef = getBuiltinBaseName(getASTContext(), ID.str(), Info.Types);
-  Info.ID = (llvm::Intrinsic::ID)getLLVMIntrinsicID(NameRef);
+  Info.ID = getLLVMIntrinsicID(NameRef);
 
   return Info;
 }
@@ -479,7 +475,7 @@ SerializedSILLoader *SILModule::getSILLoader() {
   return SILLoader.get();
 }
 
-/// \brief Given a conformance \p C and a protocol requirement \p Requirement,
+/// Given a conformance \p C and a protocol requirement \p Requirement,
 /// search the witness table for the conformance and return the witness thunk
 /// for the requirement.
 std::pair<SILFunction *, SILWitnessTable *>
@@ -514,7 +510,7 @@ SILModule::lookUpFunctionInWitnessTable(ProtocolConformanceRef C,
   return std::make_pair(nullptr, nullptr);
 }
 
-/// \brief Given a protocol \p Protocol and a requirement \p Requirement,
+/// Given a protocol \p Protocol and a requirement \p Requirement,
 /// search the protocol's default witness table and return the default
 /// witness thunk for the requirement.
 std::pair<SILFunction *, SILDefaultWitnessTable *>

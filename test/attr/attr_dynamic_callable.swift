@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -typecheck -verify %s
+// RUN: %target-typecheck-verify-swift
 
 @dynamicCallable
 struct Callable {
@@ -64,8 +64,8 @@ func testIUO(
 
 @dynamicCallable
 struct CallableReturningFunction {
-  func dynamicallyCall(withArguments arguments: [Int]) -> (_ a: Int) -> Void {
-    return { a in () }
+  func dynamicallyCall(withArguments arguments: [Int]) -> (Int) -> Void {
+    return { x in () }
   }
 }
 
@@ -138,7 +138,7 @@ class InvalidDerived : InvalidBase {
 }
 
 //===----------------------------------------------------------------------===//
-// Multiple `dynamicallyCall` method tests
+// Multiple `dynamicallyCall` methods
 //===----------------------------------------------------------------------===//
 
 @dynamicCallable
@@ -160,7 +160,7 @@ func testOverloaded(x: OverloadedCallable) {
 }
 
 //===----------------------------------------------------------------------===//
-// Existential tests
+// Existentials
 //===----------------------------------------------------------------------===//
 
 @dynamicCallable
@@ -318,7 +318,7 @@ func testEnum() {
 }
 
 //===----------------------------------------------------------------------===//
-// Generics tests
+// Generics
 //===----------------------------------------------------------------------===//
 
 @dynamicCallable
@@ -421,3 +421,49 @@ func testGenericType5<T>(a: CallableGeneric5<T>) -> Double {
 func testArchetypeType5<T, C : CallableGeneric5<T>>(a: C) -> Double {
   return a(1, 2, 3) + a(x1: 1, 2, x3: 3)
 }
+
+// SR-9239 Default argument in initializer
+
+@dynamicCallable
+struct A {
+  init(_ x: Int = 0) {}
+  func dynamicallyCall(withArguments args: [Int]) {}
+}
+
+func test9239() {
+  _ = A()() // ok
+}
+
+// SR-10313
+//
+// Modified version of the code snippet in the SR to not crash.
+
+struct MissingKeyError: Error {}
+
+@dynamicCallable
+class DictionaryBox {
+  var dictionary: [String: Any] = [:]
+
+  func dynamicallyCall<T>(withArguments args: [String]) throws -> T {
+    guard let value = dictionary[args[0]] as? T else {
+      throw MissingKeyError()
+    }
+    return value
+  }
+}
+
+func test10313() {
+  let box = DictionaryBox()
+  box.dictionary["bool"] = false
+  let _: Bool = try! box("bool") // ok
+}
+
+// SR-10753
+
+@dynamicCallable
+struct B {
+	public func dynamicallyCall(withArguments arguments: [String]) {}
+}
+
+B()("hello") // ok
+B()("\(1)") // ok

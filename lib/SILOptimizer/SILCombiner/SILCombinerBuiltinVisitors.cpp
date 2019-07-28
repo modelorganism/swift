@@ -306,12 +306,13 @@ static SILValue createIndexAddrFrom(IndexRawPointerInst *I,
                                     SILType RawPointerTy,
                                     SILBuilder &Builder) {
   Builder.setCurrentDebugScope(I->getDebugScope());
-  SILType InstanceType =
-    Metatype->getType().getMetatypeInstanceType(I->getModule());
+
+  CanType InstanceType =
+    Metatype->getType().castTo<MetatypeType>().getInstanceType();
 
   // index_raw_pointer's address type is currently always strict.
   auto *NewPTAI = Builder.createPointerToAddress(
-    I->getLoc(), Ptr, InstanceType.getAddressType(),
+    I->getLoc(), Ptr, SILType::getPrimitiveAddressType(InstanceType),
     /*isStrict*/ true, /*isInvariant*/ false);
 
   auto *DistanceAsWord =
@@ -614,13 +615,22 @@ SILInstruction *SILCombiner::visitBuiltinInst(BuiltinInst *I) {
     // Check if the element type is a trivial type.
     if (Substs.getReplacementTypes().size() == 1) {
       Type ElemType = Substs.getReplacementTypes()[0];
-      auto &SILElemTy = I->getModule().Types.getTypeLowering(ElemType);
+      auto &SILElemTy = I->getFunction()->getTypeLowering(ElemType);
       // Destroying an array of trivial types is a no-op.
       if (SILElemTy.isTrivial())
         return eraseInstFromFunction(*I);
     }
     break;
   }
+  case BuiltinValueKind::CondFailMessage:
+    if (auto *SLI = dyn_cast<StringLiteralInst>(I->getOperand(1))) {
+      if (SLI->getEncoding() == StringLiteralInst::Encoding::UTF8) {
+        Builder.createCondFail(I->getLoc(), I->getOperand(0), SLI->getValue());
+        eraseInstFromFunction(*I);
+        return nullptr;
+      }
+    }
+    break;
   default:
     break;
   }

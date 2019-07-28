@@ -35,7 +35,7 @@ private func _hasGraphemeBreakBetween(
     switch x.value {
     // Unified CJK Han ideographs, common and some supplemental, amongst
     // others:
-    //   0x3400-0xA4CF
+    //   U+3400 ~ U+A4CF
     case 0x3400...0xa4cf: return true
 
     // Repeat sub-300 check, this is beneficial for common cases of Latin
@@ -46,30 +46,34 @@ private func _hasGraphemeBreakBetween(
     case 0x0000...0x02ff: return true
 
     // Non-combining kana:
-    //   0x3041-0x3096
-    //   0x30A1-0x30FA
+    //   U+3041 ~ U+3096
+    //   U+30A1 ~ U+30FC
     case 0x3041...0x3096: return true
-    case 0x30a1...0x30fa: return true
+    case 0x30a1...0x30fc: return true
 
     // Non-combining modern (and some archaic) Cyrillic:
-    //   0x0400-0x0482 (first half of Cyrillic block)
+    //   U+0400 ~ U+0482 (first half of Cyrillic block)
     case 0x0400...0x0482: return true
 
     // Modern Arabic, excluding extenders and prependers:
-    //   0x061D-0x064A
+    //   U+061D ~ U+064A
     case 0x061d...0x064a: return true
 
     // Precomposed Hangul syllables:
-    //   0xAC00–0xD7AF
+    //   U+AC00 ~ U+D7AF
     case 0xac00...0xd7af: return true
 
     // Common general use punctuation, excluding extenders:
-    //   0x2010-0x2029
+    //   U+2010 ~ U+2029
     case 0x2010...0x2029: return true
 
     // CJK punctuation characters, excluding extenders:
-    //   0x3000-0x3029
+    //   U+3000 ~ U+3029
     case 0x3000...0x3029: return true
+
+    // Full-width forms:
+    //   U+FF01 ~ U+FF9D
+    case 0xFF01...0xFF9D: return true
 
     default: return false
     }
@@ -82,17 +86,18 @@ private func _hasGraphemeBreakBetween(
 private func _measureCharacterStrideICU(
   of utf8: UnsafeBufferPointer<UInt8>, startingAt i: Int
 ) -> Int {
-  let iterator = _ThreadLocalStorage.getUBreakIterator(utf8)
-  let offset = __swift_stdlib_ubrk_following(
-    iterator, Int32(truncatingIfNeeded: i))
+  // ICU will gives us a different result if we feed in the whole buffer, so
+  // slice it appropriately.
+  let utf8Slice = UnsafeBufferPointer(rebasing: utf8[i...])
+  let iterator = _ThreadLocalStorage.getUBreakIterator(utf8Slice)
+  let offset = __swift_stdlib_ubrk_following(iterator, 0)
+
   // ubrk_following returns -1 (UBRK_DONE) when it hits the end of the buffer.
-  if _fastPath(offset != -1) {
-    // The offset into our buffer is the distance.
-    _sanityCheck(offset > i, "zero-sized grapheme?")
-    return Int(truncatingIfNeeded: offset) &- i
-  }
-  _sanityCheck(utf8.count > i)
-  return utf8.count &- i
+  guard _fastPath(offset != -1) else { return utf8Slice.count }
+
+  // The offset into our buffer is the distance.
+  _internalInvariant(offset > 0, "zero-sized grapheme?")
+  return Int(truncatingIfNeeded: offset)
 }
 
 @inline(never) // slow-path
@@ -100,16 +105,18 @@ private func _measureCharacterStrideICU(
 private func _measureCharacterStrideICU(
   of utf16: UnsafeBufferPointer<UInt16>, startingAt i: Int
 ) -> Int {
-  let iterator = _ThreadLocalStorage.getUBreakIterator(utf16)
-  let offset = __swift_stdlib_ubrk_following(
-    iterator, Int32(truncatingIfNeeded: i))
+  // ICU will gives us a different result if we feed in the whole buffer, so
+  // slice it appropriately.
+  let utf16Slice = UnsafeBufferPointer(rebasing: utf16[i...])
+  let iterator = _ThreadLocalStorage.getUBreakIterator(utf16Slice)
+  let offset = __swift_stdlib_ubrk_following(iterator, 0)
+
   // ubrk_following returns -1 (UBRK_DONE) when it hits the end of the buffer.
-  if _fastPath(offset != -1) {
-    // The offset into our buffer is the distance.
-    _sanityCheck(offset > i, "zero-sized grapheme?")
-    return Int(truncatingIfNeeded: offset) &- i
-  }
-  return utf16.count &- i
+  guard _fastPath(offset != -1) else { return utf16Slice.count }
+
+  // The offset into our buffer is the distance.
+  _internalInvariant(offset > 0, "zero-sized grapheme?")
+  return Int(truncatingIfNeeded: offset)
 }
 
 @inline(never) // slow-path
@@ -117,13 +124,16 @@ private func _measureCharacterStrideICU(
 private func _measureCharacterStrideICU(
   of utf8: UnsafeBufferPointer<UInt8>, endingAt i: Int
 ) -> Int {
-  let iterator = _ThreadLocalStorage.getUBreakIterator(utf8)
-  let offset = __swift_stdlib_ubrk_preceding(
-    iterator, Int32(truncatingIfNeeded: i))
+  // Slice backwards as well, even though ICU currently seems to give the same
+  // answer as unsliced.
+  let utf8Slice = UnsafeBufferPointer(rebasing: utf8[..<i])
+  let iterator = _ThreadLocalStorage.getUBreakIterator(utf8Slice)
+  let offset = __swift_stdlib_ubrk_preceding(iterator, Int32(utf8Slice.count))
+
   // ubrk_following returns -1 (UBRK_DONE) when it hits the end of the buffer.
   if _fastPath(offset != -1) {
     // The offset into our buffer is the distance.
-    _sanityCheck(offset < i, "zero-sized grapheme?")
+    _internalInvariant(offset < i, "zero-sized grapheme?")
     return i &- Int(truncatingIfNeeded: offset)
   }
   return i &- utf8.count
@@ -134,13 +144,16 @@ private func _measureCharacterStrideICU(
 private func _measureCharacterStrideICU(
   of utf16: UnsafeBufferPointer<UInt16>, endingAt i: Int
 ) -> Int {
-  let iterator = _ThreadLocalStorage.getUBreakIterator(utf16)
-  let offset = __swift_stdlib_ubrk_preceding(
-    iterator, Int32(truncatingIfNeeded: i))
+  // Slice backwards as well, even though ICU currently seems to give the same
+  // answer as unsliced.
+  let utf16Slice = UnsafeBufferPointer(rebasing: utf16[..<i])
+  let iterator = _ThreadLocalStorage.getUBreakIterator(utf16Slice)
+  let offset = __swift_stdlib_ubrk_preceding(iterator, Int32(utf16Slice.count))
+
   // ubrk_following returns -1 (UBRK_DONE) when it hits the end of the buffer.
   if _fastPath(offset != -1) {
     // The offset into our buffer is the distance.
-    _sanityCheck(offset < i, "zero-sized grapheme?")
+    _internalInvariant(offset < i, "zero-sized grapheme?")
     return i &- Int(truncatingIfNeeded: offset)
   }
   return i &- utf16.count
@@ -152,7 +165,7 @@ extension _StringGuts {
   internal func isOnGraphemeClusterBoundary(_ i: String.Index) -> Bool {
     guard i.transcodedOffset == 0 else { return false }
 
-    let offset = i.encodedOffset
+    let offset = i._encodedOffset
     if offset == 0 || offset == self.count { return true }
 
     guard isOnUnicodeScalarBoundary(i) else { return false }
@@ -187,13 +200,13 @@ extension _StringGuts {
   @_effects(releasenone)
   private func _foreignOpaqueCharacterStride(startingAt i: Int) -> Int {
 #if _runtime(_ObjC)
-    _sanityCheck(isForeign)
+    _internalInvariant(isForeign)
 
     // TODO(String performance): Faster to do it from a pointer directly
     let count = _object.largeCount
     let cocoa = _object.cocoaObject
 
-    let startIdx = String.Index(encodedOffset: i)
+    let startIdx = String.Index(_encodedOffset: i)
     let (sc1, len) = foreignErrorCorrectedScalar(startingAt: startIdx)
     if i &+ len == count {
       // Last scalar is last grapheme
@@ -253,13 +266,13 @@ extension _StringGuts {
   @_effects(releasenone)
   private func _foreignOpaqueCharacterStride(endingAt i: Int) -> Int {
 #if _runtime(_ObjC)
-    _sanityCheck(isForeign)
+    _internalInvariant(isForeign)
 
     // TODO(String performance): Faster to do it from a pointer directly
     let count = _object.largeCount
     let cocoa = _object.cocoaObject
 
-    let endIdx = String.Index(encodedOffset: i)
+    let endIdx = String.Index(_encodedOffset: i)
     let (sc2, len) = foreignErrorCorrectedScalar(endingAt: endIdx)
     if i &- len == 0 {
       // First scalar is first grapheme

@@ -16,7 +16,7 @@
 /// or NSDictionary will be the result of calling `_bridgeToObjectiveC`
 /// on each element of the source container.
 public protocol _ObjectiveCBridgeable {
-  associatedtype _ObjectiveCType : AnyObject
+  associatedtype _ObjectiveCType: AnyObject
 
   /// Convert `self` to Objective-C.
   func _bridgeToObjectiveC() -> _ObjectiveCType
@@ -356,7 +356,7 @@ public func _getBridgedNonVerbatimObjectiveCType<T>(_: T.Type) -> Any.Type?
 /// This type does not carry an owner pointer unlike the other C*Pointer types
 /// because it only needs to reference the results of inout conversions, which
 /// already have writeback-scoped lifetime.
-@_fixed_layout
+@frozen
 public struct AutoreleasingUnsafeMutablePointer<Pointee /* TODO : class */>
   :  _Pointer {
 
@@ -420,6 +420,35 @@ public struct AutoreleasingUnsafeMutablePointer<Pointee /* TODO : class */>
     }
   }
 
+  /// Explicit construction from an UnsafeMutablePointer.		
+  ///		
+  /// This is inherently unsafe; UnsafeMutablePointer assumes the		
+  /// referenced memory has +1 strong ownership semantics, whereas		
+  /// AutoreleasingUnsafeMutablePointer implies +0 semantics.		
+  ///		
+  /// - Warning: Accessing `pointee` as a type that is unrelated to		
+  ///   the underlying memory's bound type is undefined.		
+  @_transparent		
+  public init<U>(_ from: UnsafeMutablePointer<U>) {		
+   self._rawValue = from._rawValue		
+  }		
+
+  /// Explicit construction from an UnsafeMutablePointer.		
+  ///		
+  /// Returns nil if `from` is nil.		
+  ///		
+  /// This is inherently unsafe; UnsafeMutablePointer assumes the		
+  /// referenced memory has +1 strong ownership semantics, whereas		
+  /// AutoreleasingUnsafeMutablePointer implies +0 semantics.		
+  ///		
+  /// - Warning: Accessing `pointee` as a type that is unrelated to		
+  ///   the underlying memory's bound type is undefined.		
+  @_transparent		
+  public init?<U>(_ from: UnsafeMutablePointer<U>?) {		
+   guard let unwrapped = from else { return nil }		
+   self.init(unwrapped)		
+  }
+     
   /// Explicit construction from a UnsafePointer.
   ///
   /// This is inherently unsafe because UnsafePointers do not imply
@@ -534,7 +563,7 @@ internal struct _CocoaFastEnumerationStackBuf {
     _item14 = _item0
     _item15 = _item0
 
-    _sanityCheck(MemoryLayout.size(ofValue: self) >=
+    _internalInvariant(MemoryLayout.size(ofValue: self) >=
                    MemoryLayout<Optional<UnsafeRawPointer>>.size * count)
   }
 }
@@ -649,13 +678,12 @@ public func _extractDynamicValue<T>(_ value: T) -> AnyObject?
 @_silgen_name("_swift_bridgeToObjectiveCUsingProtocolIfPossible")
 public func _bridgeToObjectiveCUsingProtocolIfPossible<T>(_ value: T) -> AnyObject?
 
-@usableFromInline
-protocol _Unwrappable {
-  func unwrap() -> Any?
+internal protocol _Unwrappable {
+  func _unwrap() -> Any?
 }
 
 extension Optional: _Unwrappable {
-  func unwrap() -> Any? {
+  internal func _unwrap() -> Any? {
     return self
   }
 }
@@ -706,7 +734,7 @@ public func _bridgeAnythingToObjectiveC<T>(_ x: T) -> AnyObject {
   }
   
   if !done, let wrapper = source as? _Unwrappable {
-    if let value = wrapper.unwrap() {
+    if let value = wrapper._unwrap() {
       result = value as AnyObject
     } else {
       result = _nullPlaceholder

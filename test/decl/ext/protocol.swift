@@ -177,6 +177,23 @@ extension S1 {
 }
 
 // ----------------------------------------------------------------------------
+// Protocol extensions with redundant requirements
+// ----------------------------------------------------------------------------
+
+protocol FooProtocol {}
+extension FooProtocol where Self: FooProtocol {} // expected-warning {{requirement of 'Self' to 'FooProtocol' is redundant in an extension of 'FooProtocol'}}
+
+protocol AnotherFooProtocol {}
+protocol BazProtocol {}
+extension AnotherFooProtocol where Self: BazProtocol, Self: AnotherFooProtocol {} // expected-warning {{requirement of 'Self' to 'AnotherFooProtocol' is redundant in an extension of 'AnotherFooProtocol'}}
+
+protocol AnotherBazProtocol {
+  associatedtype BazValue
+}
+
+extension AnotherBazProtocol where BazValue: AnotherBazProtocol {} // ok, does not warn because BazValue is not Self
+
+// ----------------------------------------------------------------------------
 // Protocol extensions with additional requirements
 // ----------------------------------------------------------------------------
 extension P4 where Self.AssocP4 : P1 {
@@ -219,13 +236,9 @@ extension P4 where Self.AssocP4 == Bool {
 }
 
 func testP4(_ s4a: S4a, s4b: S4b, s4c: S4c, s4d: S4d) {
-  // FIXME: Both of the 'ambiguous' examples below are indeed ambiguous,
-  //        because they don't match on conformance and same-type
-  //        requirement of different overloads, but diagnostic
-  //        could be improved to point out exactly what is missing in each case.
-  s4a.extP4a() // expected-error{{ambiguous reference to instance method 'extP4a()'}}
+  s4a.extP4a() // expected-error{{no exact matches in call to instance method 'extP4a()'}}
   s4b.extP4a() // ok
-  s4c.extP4a() // expected-error{{ambiguous reference to instance method 'extP4a()'}}
+  s4c.extP4a() // expected-error{{no exact matches in call to instance method 'extP4a()'}}
   s4c.extP4Int() // okay
   var b1 = s4d.extP4a() // okay, "Bool" version
   b1 = true // checks type above

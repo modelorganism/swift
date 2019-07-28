@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "ArgumentScope.h"
 #include "ArgumentSource.h"
 #include "Condition.h"
 #include "Initialization.h"
@@ -232,15 +233,14 @@ Condition SILGenFunction::emitCondition(Expr *E, bool invertValue,
   assert(B.hasValidInsertionPoint() &&
          "emitting condition at unreachable point");
 
-  // Sema forces conditions to have Builtin.i1 type, which guarantees this.
+  // Sema forces conditions to have Bool type, which guarantees this.
   SILValue V;
   {
     FullExpr Scope(Cleanups, CleanupLocation(E));
     V = emitRValue(E).forwardAsSingleValue(*this, E);
   }
-  assert(V->getType().castTo<BuiltinIntegerType>()->isFixedWidth(1));
-
-  return emitCondition(V, E, invertValue, contArgs, NumTrueTaken,
+  auto i1Value = emitUnwrapIntegerResult(E, V);
+  return emitCondition(i1Value, E, invertValue, contArgs, NumTrueTaken,
                        NumFalseTaken);
 }
 
@@ -318,6 +318,16 @@ void StmtEmitter::visitBraceStmt(BraceStmt *S) {
       } else {
         diagnose(getASTContext(), ESD.getStartLoc(),
                  diag::unreachable_code);
+        if (!S->getElements().empty()) {
+          for (auto *arg : SGF.getFunction().getArguments()) {
+            if (arg->getType().getASTType()->isStructurallyUninhabited()) {
+              diagnose(getASTContext(), S->getStartLoc(),
+                       diag::unreachable_code_uninhabited_param_note,
+                       arg->getDecl()->getBaseName().userFacingName());
+              break;
+            }
+          }
+        }
       }
       return;
     }
@@ -416,22 +426,22 @@ prepareIndirectResultInit(SILGenFunction &SGF, CanType resultType,
 ///   components of the result
 /// \param cleanups - will be filled (after initialization completes)
 ///   with all the active cleanups managing the result values
-static std::unique_ptr<Initialization>
-prepareIndirectResultInit(SILGenFunction &SGF, CanType formalResultType,
-                          SmallVectorImpl<SILValue> &directResultsBuffer,
-                          SmallVectorImpl<CleanupHandle> &cleanups) {
-  auto fnConv = SGF.F.getConventions();
+std::unique_ptr<Initialization>
+SILGenFunction::prepareIndirectResultInit(CanType formalResultType,
+                                 SmallVectorImpl<SILValue> &directResultsBuffer,
+                                 SmallVectorImpl<CleanupHandle> &cleanups) {
+  auto fnConv = F.getConventions();
 
   // Make space in the direct-results array for all the entries we need.
   directResultsBuffer.append(fnConv.getNumDirectSILResults(), SILValue());
 
   ArrayRef<SILResultInfo> allResults = fnConv.funcTy->getResults();
   MutableArrayRef<SILValue> directResults = directResultsBuffer;
-  ArrayRef<SILArgument*> indirectResultAddrs = SGF.F.getIndirectResults();
+  ArrayRef<SILArgument*> indirectResultAddrs = F.getIndirectResults();
 
-  auto init = prepareIndirectResultInit(SGF, formalResultType, allResults,
-                                        directResults, indirectResultAddrs,
-                                        cleanups);
+  auto init = ::prepareIndirectResultInit(*this, formalResultType, allResults,
+                                          directResults, indirectResultAddrs,
+                                          cleanups);
 
   assert(allResults.empty());
   assert(directResults.empty());
@@ -451,7 +461,7 @@ void SILGenFunction::emitReturnExpr(SILLocation branchLoc,
     // Build an initialization which recursively destructures the tuple.
     SmallVector<CleanupHandle, 4> resultCleanups;
     InitializationPtr resultInit =
-      prepareIndirectResultInit(*this, ret->getType()->getCanonicalType(),
+      prepareIndirectResultInit(ret->getType()->getCanonicalType(),
                                 directResults, resultCleanups);
 
     // Emit the result expression into the initialization.
@@ -515,8 +525,8 @@ void StmtEmitter::visitPoundAssertStmt(PoundAssertStmt *stmt) {
         SGF.emitRValueAsSingleValue(stmt->getCondition()).getUnmanagedValue();
   }
 
-  // Sema forces conditions to have Builtin.i1 type.
-  assert(condition->getType().castTo<BuiltinIntegerType>()->isFixedWidth(1));
+  // Extract the i1 from the Bool struct.
+  auto i1Value = SGF.emitUnwrapIntegerResult(stmt, condition);
 
   SILValue message = SGF.B.createStringLiteral(
       stmt, stmt->getMessage(), StringLiteralInst::Encoding::UTF8);
@@ -524,7 +534,7 @@ void StmtEmitter::visitPoundAssertStmt(PoundAssertStmt *stmt) {
   auto resultType = SGF.getASTContext().TheEmptyTupleType;
   SGF.B.createBuiltin(
       stmt, SGF.getASTContext().getIdentifier("poundAssert"),
-      SGF.getLoweredType(resultType), {}, {condition, message});
+      SGF.getLoweredType(resultType), {}, {i1Value, message});
 }
 
 namespace {
@@ -889,7 +899,20 @@ void StmtEmitter::visitRepeatWhileStmt(RepeatWhileStmt *S) {
 void StmtEmitter::visitForEachStmt(ForEachStmt *S) {
   // Emit the 'iterator' variable that we'll be using for iteration.
   LexicalScope OuterForScope(SGF, CleanupLocation(S));
-  SGF.visitPatternBindingDecl(S->getIterator());
+  {
+    auto initialization =
+        SGF.emitInitializationForVarDecl(S->getIteratorVar(), false);
+    SILLocation loc = SILLocation(S->getSequence());
+    RValue result = SGF.emitApplyMethod(
+        loc, S->getMakeIterator(), ArgumentSource(S->getSequence()),
+        PreparedArguments(ArrayRef<AnyFunctionType::Param>({})),
+        SGFContext(initialization.get()));
+    if (!result.isInContext()) {
+      ArgumentSource(SILLocation(S->getSequence()),
+                     std::move(result).ensurePlusOne(SGF, loc))
+          .forwardInto(SGF, initialization.get());
+    }
+  }
 
   // If we ever reach an unreachable point, stop emitting statements.
   // This will need revision if we ever add goto.
@@ -899,7 +922,15 @@ void StmtEmitter::visitForEachStmt(ForEachStmt *S) {
   // to hold the results.  This will be initialized on every entry into the loop
   // header and consumed by the loop body. On loop exit, the terminating value
   // will be in the buffer.
-  auto optTy = S->getIteratorNext()->getType()->getCanonicalType();
+  CanType optTy;
+  if (S->getConvertElementExpr()) {
+    optTy = S->getConvertElementExpr()->getType()->getCanonicalType();
+  } else {
+    optTy = OptionalType::get(S->getSequenceConformance()->getTypeWitnessByName(
+                                  S->getSequence()->getType(),
+                                  SGF.getASTContext().Id_Element))
+                ->getCanonicalType();
+  }
   auto &optTL = SGF.getTypeLowering(optTy);
   SILValue addrOnlyBuf;
   ManagedValue nextBufOrValue;
@@ -915,6 +946,25 @@ void StmtEmitter::visitForEachStmt(ForEachStmt *S) {
   JumpDest endDest = createJumpDest(S->getBody());
   SGF.BreakContinueDestStack.push_back({ S, endDest, loopDest });
 
+  auto buildArgumentSource = [&]() {
+    if (cast<FuncDecl>(S->getIteratorNext().getDecl())->getSelfAccessKind() ==
+        SelfAccessKind::Mutating) {
+      LValue lv =
+          SGF.emitLValue(S->getIteratorVarRef(), SGFAccessKind::ReadWrite);
+      return ArgumentSource(S, std::move(lv));
+    }
+    LValue lv =
+        SGF.emitLValue(S->getIteratorVarRef(), SGFAccessKind::OwnedObjectRead);
+    return ArgumentSource(
+        S, SGF.emitLoadOfLValue(S->getIteratorVarRef(), std::move(lv),
+                                SGFContext().withFollowingSideEffects()));
+  };
+
+  auto buildElementRValue = [&](SILLocation loc, SGFContext ctx) {
+    return SGF.emitApplyMethod(
+        loc, S->getIteratorNext(), buildArgumentSource(),
+        PreparedArguments(ArrayRef<AnyFunctionType::Param>({})), ctx);
+  };
   // Then emit the loop destination block.
   //
   // Advance the generator.  Use a scope to ensure that any temporary stack
@@ -924,15 +974,32 @@ void StmtEmitter::visitForEachStmt(ForEachStmt *S) {
     // innerForScope doesn't clean it up.
     auto nextInit = SGF.useBufferAsTemporary(addrOnlyBuf, optTL);
     {
-      Scope innerForScope(SGF.Cleanups, CleanupLocation(S->getIteratorNext()));
-      SGF.emitExprInto(S->getIteratorNext(), nextInit.get());
+      ArgumentScope innerForScope(SGF, SILLocation(S));
+      SILLocation loc = SILLocation(S);
+      RValue result;
+      if (S->getElementExpr()) {
+        result = buildElementRValue(loc, SGFContext());
+        SILGenFunction::OpaqueValueRAII pushOpaqueValue(
+            SGF, S->getElementExpr(),
+            std::move(result).getAsSingleValue(SGF, loc));
+        result = SGF.emitRValue(S->getConvertElementExpr(),
+                                SGFContext(nextInit.get()));
+      } else {
+        result = buildElementRValue(loc, SGFContext(nextInit.get()));
+      }
+      if (!result.isInContext()) {
+        ArgumentSource(SILLocation(S->getSequence()),
+                       std::move(result).ensurePlusOne(SGF, loc))
+            .forwardInto(SGF, nextInit.get());
+      }
+      innerForScope.pop();
     }
     nextBufOrValue = nextInit->getManagedAddress();
-
   } else {
-    Scope innerForScope(SGF.Cleanups, CleanupLocation(S->getIteratorNext()));
+    ArgumentScope innerForScope(SGF, SILLocation(S));
     nextBufOrValue = innerForScope.popPreservingValue(
-        SGF.emitRValueAsSingleValue(S->getIteratorNext()));
+        buildElementRValue(SILLocation(S), SGFContext())
+            .getAsSingleValue(SGF, SILLocation(S)));
   }
 
   SILBasicBlock *failExitingBlock = createBasicBlock();

@@ -22,6 +22,7 @@
 #include "swift/Basic/ProfileCounter.h"
 #include "swift/SIL/SILBasicBlock.h"
 #include "swift/SIL/SILDebugScope.h"
+#include "swift/SIL/SILDeclRef.h"
 #include "swift/SIL/SILLinkage.h"
 #include "swift/SIL/SILPrintContext.h"
 #include "llvm/ADT/StringMap.h"
@@ -37,6 +38,11 @@ class SILInstruction;
 class SILModule;
 class SILFunctionBuilder;
 class SILProfiler;
+
+namespace Lowering {
+class TypeLowering;
+class AbstractionPattern;
+}
 
 enum IsBare_t { IsNotBare, IsBare };
 enum IsTransparent_t { IsNotTransparent, IsTransparent };
@@ -232,12 +238,13 @@ private:
   /// *) It is a function referenced by the specialization information.
   bool Zombie = false;
 
-  /// True if SILOwnership is enabled for this function.
+  /// True if this function is in Ownership SSA form and thus must pass
+  /// ownership verification.
   ///
   /// This enables the verifier to easily prove that before the Ownership Model
   /// Eliminator runs on a function, we only see a non-semantic-arc world and
   /// after the pass runs, we only see a semantic-arc world.
-  bool HasQualifiedOwnership = true;
+  bool HasOwnership = true;
 
   /// Set if the function body was deserialized from canonical SIL. This implies
   /// that the function's home module performed SIL diagnostics prior to
@@ -356,7 +363,8 @@ public:
     Profiler = InheritedProfiler;
   }
 
-  void createProfiler(ASTNode Root, ForDefinition_t forDefinition);
+  void createProfiler(ASTNode Root, SILDeclRef forDecl,
+                      ForDefinition_t forDefinition);
 
   void discardProfiler() { Profiler = nullptr; }
 
@@ -423,12 +431,12 @@ public:
   bool isZombie() const { return Zombie; }
 
   /// Returns true if this function has qualified ownership instructions in it.
-  bool hasQualifiedOwnership() const { return HasQualifiedOwnership; }
+  bool hasOwnership() const { return HasOwnership; }
 
-  /// Sets the HasQualifiedOwnership flag to false. This signals to SIL that no
+  /// Sets the HasOwnership flag to false. This signals to SIL that no
   /// ownership instructions should be in this function any more.
-  void setUnqualifiedOwnership() {
-    HasQualifiedOwnership = false;
+  void setOwnershipEliminated() {
+    HasOwnership = false;
   }
 
   /// Returns true if this function was deserialized from canonical
@@ -462,6 +470,21 @@ public:
             ? ResilienceExpansion::Minimal
             : ResilienceExpansion::Maximal);
   }
+
+  const Lowering::TypeLowering &
+  getTypeLowering(Lowering::AbstractionPattern orig, Type subst);
+
+  const Lowering::TypeLowering &getTypeLowering(Type t) const;
+
+  SILType getLoweredType(Lowering::AbstractionPattern orig, Type subst) const;
+
+  SILType getLoweredType(Type t) const;
+
+  SILType getLoweredLoadableType(Type t) const;
+
+  const Lowering::TypeLowering &getTypeLowering(SILType type) const;
+
+  bool isTypeABIAccessible(SILType type) const;
 
   /// Returns true if this function has a calling convention that has a self
   /// argument.
@@ -569,7 +592,6 @@ public:
     return IsDynamicallyReplaceable_t(IsDynamicReplaceable);
   }
   void setIsDynamic(IsDynamicallyReplaceable_t value = IsDynamic) {
-    assert(IsDynamicReplaceable == IsNotDynamic && "already set");
     IsDynamicReplaceable = value;
     assert(!Transparent || !IsDynamicReplaceable);
   }
@@ -713,7 +735,7 @@ public:
     return EffectsKindAttr != EffectsKind::Unspecified;
   }
 
-  /// \brief Set the function side effect information.
+  /// Set the function side effect information.
   void setEffectsKind(EffectsKind E) {
     EffectsKindAttr = E;
   }

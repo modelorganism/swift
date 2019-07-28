@@ -117,6 +117,8 @@ namespace {
       return getStartLocImpl(E);
     }
     template <class T> static SourceRange getSourceRange(const T *E) {
+      if (E->getStartLoc().isInvalid() != E->getEndLoc().isInvalid())
+        return SourceRange();
       return { E->getStartLoc(), E->getEndLoc() };
     }
   };
@@ -308,6 +310,9 @@ ConcreteDeclRef Expr::getReferencedDecl() const {
   PASS_THROUGH_REFERENCE(RebindSelfInConstructor, getSubExpr);
 
   NO_REFERENCE(OpaqueValue);
+  NO_REFERENCE(DefaultArgument);
+  NO_REFERENCE(CallerDefaultArgument);
+
   PASS_THROUGH_REFERENCE(BindOptional, getSubExpr);
   PASS_THROUGH_REFERENCE(OptionalEvaluation, getSubExpr);
   PASS_THROUGH_REFERENCE(ForceValue, getSubExpr);
@@ -322,7 +327,7 @@ ConcreteDeclRef Expr::getReferencedDecl() const {
 
   PASS_THROUGH_REFERENCE(ConstructorRefCall, getFn);
   PASS_THROUGH_REFERENCE(Load, getSubExpr);
-  NO_REFERENCE(TupleShuffle);
+  NO_REFERENCE(DestructureTuple);
   NO_REFERENCE(UnresolvedTypeConversion);
   PASS_THROUGH_REFERENCE(FunctionConversion, getSubExpr);
   PASS_THROUGH_REFERENCE(CovariantFunctionConversion, getSubExpr);
@@ -347,6 +352,7 @@ ConcreteDeclRef Expr::getReferencedDecl() const {
   PASS_THROUGH_REFERENCE(BridgeToObjC, getSubExpr);
   PASS_THROUGH_REFERENCE(BridgeFromObjC, getSubExpr);
   PASS_THROUGH_REFERENCE(ConditionalBridgeFromObjC, getSubExpr);
+  PASS_THROUGH_REFERENCE(UnderlyingToOpaque, getSubExpr);
   NO_REFERENCE(Coerce);
   NO_REFERENCE(ForcedCheckedCast);
   NO_REFERENCE(ConditionalCheckedCast);
@@ -440,7 +446,8 @@ void Expr::forEachChildExpr(llvm::function_ref<Expr *(Expr *)> callback) {
 }
 
 bool Expr::isTypeReference(
-    llvm::function_ref<Type(const Expr *)> getType) const {
+    llvm::function_ref<Type(const Expr *)> getType,
+    llvm::function_ref<Decl *(const Expr *)> getDecl) const {
   // If the result isn't a metatype, there's nothing else to do.
   if (!getType(this)->is<AnyMetatypeType>())
     return false;
@@ -461,22 +468,33 @@ bool Expr::isTypeReference(
     if (auto memberRef = dyn_cast<MemberRefExpr>(expr))
       return isa<TypeDecl>(memberRef->getMember().getDecl());
 
+    // Any other expressions which might be referencing
+    // a declaration e.g. not yet type-checked ones like
+    // `UnresolvedDotExpr`.
+    if (auto *decl = getDecl(expr))
+      return isa<TypeDecl>(decl);
+
     // When the base of a "." expression is ignored, look at the member.
     if (auto ignoredDot = dyn_cast<DotSyntaxBaseIgnoredExpr>(expr)) {
       expr = ignoredDot->getRHS();
       continue;
     }
 
+    if (auto *USE = dyn_cast<UnresolvedSpecializeExpr>(expr)) {
+      expr = USE->getSubExpr();
+      continue;
+    }
+
     // Anything else is not statically derived.
     return false;
   } while (true);
-
 }
 
 bool Expr::isStaticallyDerivedMetatype(
-    llvm::function_ref<Type(const Expr *)> getType) const {
+    llvm::function_ref<Type(const Expr *)> getType,
+    llvm::function_ref<bool(const Expr *)> isTypeReference) const {
   // The expression must first be a type reference.
-  if (!isTypeReference(getType))
+  if (!isTypeReference(this))
     return false;
 
   auto type = getType(this)
@@ -599,6 +617,8 @@ bool Expr::canAppendPostfixExpression(bool appendingPostfixOperator) const {
 
   case ExprKind::RebindSelfInConstructor:
   case ExprKind::OpaqueValue:
+  case ExprKind::DefaultArgument:
+  case ExprKind::CallerDefaultArgument:
   case ExprKind::BindOptional:
   case ExprKind::OptionalEvaluation:
     return false;
@@ -624,7 +644,7 @@ bool Expr::canAppendPostfixExpression(bool appendingPostfixOperator) const {
     return false;
 
   case ExprKind::Load:
-  case ExprKind::TupleShuffle:
+  case ExprKind::DestructureTuple:
   case ExprKind::UnresolvedTypeConversion:
   case ExprKind::FunctionConversion:
   case ExprKind::CovariantFunctionConversion:
@@ -650,6 +670,7 @@ bool Expr::canAppendPostfixExpression(bool appendingPostfixOperator) const {
   case ExprKind::ConditionalBridgeFromObjC:
   case ExprKind::BridgeFromObjC:
   case ExprKind::BridgeToObjC:
+  case ExprKind::UnderlyingToOpaque:
     // Implicit conversion nodes have no syntax of their own; defer to the
     // subexpression.
     return cast<ImplicitConversionExpr>(this)->getSubExpr()
@@ -698,17 +719,18 @@ llvm::DenseMap<Expr *, Expr *> Expr::getParentMap() {
   return parentMap;
 }
 
-llvm::DenseMap<Expr *, unsigned> Expr::getDepthMap() {
+llvm::DenseMap<Expr *, std::pair<unsigned, Expr *>> Expr::getDepthMap() {
   class RecordingTraversal : public ASTWalker {
   public:
-    llvm::DenseMap<Expr *, unsigned> &DepthMap;
+    llvm::DenseMap<Expr *, std::pair<unsigned, Expr *>> &DepthMap;
     unsigned Depth = 0;
 
-    explicit RecordingTraversal(llvm::DenseMap<Expr *, unsigned> &depthMap)
-      : DepthMap(depthMap) { }
+    explicit RecordingTraversal(
+        llvm::DenseMap<Expr *, std::pair<unsigned, Expr *>> &depthMap)
+        : DepthMap(depthMap) {}
 
     std::pair<bool, Expr *> walkToExprPre(Expr *E) override {
-      DepthMap[E] = Depth;
+      DepthMap[E] = {Depth, Parent.getAsExpr()};
       Depth++;
       return { true, E };
     }
@@ -719,7 +741,7 @@ llvm::DenseMap<Expr *, unsigned> Expr::getDepthMap() {
     }
   };
 
-  llvm::DenseMap<Expr *, unsigned> depthMap;
+  llvm::DenseMap<Expr *, std::pair<unsigned, Expr *>> depthMap;
   RecordingTraversal traversal(depthMap);
   walk(traversal);
   return depthMap;
@@ -751,103 +773,6 @@ llvm::DenseMap<Expr *, unsigned> Expr::getPreorderIndexMap() {
 // Support methods for Exprs.
 //===----------------------------------------------------------------------===//
 
-static LiteralExpr *
-shallowCloneImpl(const NilLiteralExpr *E, ASTContext &Ctx,
-                 llvm::function_ref<Type(const Expr *)> getType) {
-  return new (Ctx) NilLiteralExpr(E->getLoc());
-}
-
-static LiteralExpr *
-shallowCloneImpl(const IntegerLiteralExpr *E, ASTContext &Ctx,
-                 llvm::function_ref<Type(const Expr *)> getType) {
-  auto res = new (Ctx) IntegerLiteralExpr(E->getDigitsText(),
-                                          E->getSourceRange().End);
-  if (E->isNegative())
-    res->setNegative(E->getSourceRange().Start);
-  return res;
-}
-
-static LiteralExpr *
-shallowCloneImpl(const FloatLiteralExpr *E, ASTContext &Ctx,
-                 llvm::function_ref<Type(const Expr *)> getType) {
-  auto res = new (Ctx) FloatLiteralExpr(E->getDigitsText(),
-                                        E->getSourceRange().End);
-  if (E->isNegative())
-    res->setNegative(E->getSourceRange().Start);
-  return res;
-}
-static LiteralExpr *
-shallowCloneImpl(const BooleanLiteralExpr *E, ASTContext &Ctx,
-                 llvm::function_ref<Type(const Expr *)> getType) {
-  return new (Ctx) BooleanLiteralExpr(E->getValue(), E->getLoc());
-}
-static LiteralExpr *
-shallowCloneImpl(const StringLiteralExpr *E, ASTContext &Ctx,
-                 llvm::function_ref<Type(const Expr *)> getType) {
-  auto res = new (Ctx) StringLiteralExpr(E->getValue(), E->getSourceRange());
-  res->setEncoding(E->getEncoding());
-  return res;
-}
-
-static LiteralExpr *
-shallowCloneImpl(const InterpolatedStringLiteralExpr *E, ASTContext &Ctx,
-                 llvm::function_ref<Type(const Expr *)> getType) {
-  auto res = new (Ctx) InterpolatedStringLiteralExpr(E->getLoc(),
-                                                     E->getLiteralCapacity(),
-                                                     E->getInterpolationCount(),
-                                                     E->getAppendingExpr());
-  res->setSemanticExpr(E->getSemanticExpr());
-  return res;
-}
-
-static LiteralExpr *
-shallowCloneImpl(const MagicIdentifierLiteralExpr *E, ASTContext &Ctx,
-                 llvm::function_ref<Type(const Expr *)> getType) {
-  auto res = new (Ctx) MagicIdentifierLiteralExpr(E->getKind(),
-                                                  E->getSourceRange().End);
-  if (res->isString())
-    res->setStringEncoding(E->getStringEncoding());
-  return res;
-}
-
-static LiteralExpr *
-shallowCloneImpl(const ObjectLiteralExpr *E, ASTContext &Ctx,
-                 llvm::function_ref<Type(const Expr *)> getType) {
-  auto res =
-      ObjectLiteralExpr::create(Ctx, E->getStartLoc(), E->getLiteralKind(),
-                                E->getArg(), E->isImplicit(), getType);
-  res->setSemanticExpr(E->getSemanticExpr());
-  return res;
-}
-
-// Make an exact copy of this AST node.
-LiteralExpr *LiteralExpr::shallowClone(
-    ASTContext &Ctx, llvm::function_ref<void(Expr *, Type)> setType,
-                     llvm::function_ref<Type(const Expr *)> getType) const {
-  LiteralExpr *Result = nullptr;
-  switch (getKind()) {
-  default: llvm_unreachable("Unknown literal type!");
-#define DISPATCH_CLONE(KIND)                                                   \
-  case ExprKind::KIND:                                                         \
-    Result = shallowCloneImpl(cast<KIND##Expr>(this), Ctx, getType);           \
-    break;
-
-    DISPATCH_CLONE(NilLiteral)
-    DISPATCH_CLONE(IntegerLiteral)
-    DISPATCH_CLONE(FloatLiteral)
-    DISPATCH_CLONE(BooleanLiteral)
-    DISPATCH_CLONE(StringLiteral)
-    DISPATCH_CLONE(InterpolatedStringLiteral)
-    DISPATCH_CLONE(ObjectLiteral)
-    DISPATCH_CLONE(MagicIdentifierLiteral)
-#undef DISPATCH_CLONE
-  }
-
-  setType(Result, getType(this));
-  Result->setImplicit(isImplicit());
-  return Result;
-}
-
 IntegerLiteralExpr * IntegerLiteralExpr::createFromUnsigned(ASTContext &C, unsigned value) {
   llvm::SmallString<8> Scratch;
   llvm::APInt(sizeof(unsigned)*8, value).toString(Scratch, 10, /*signed*/ false);
@@ -863,6 +788,8 @@ APInt IntegerLiteralExpr::getRawValue() const {
 APInt IntegerLiteralExpr::getValue() const {
   assert(!getType().isNull() && "Semantic analysis has not completed");
   assert(!getType()->hasError() && "Should have a valid type");
+  if (!getType()->is<AnyBuiltinIntegerType>())
+    return getRawValue();
   auto width = getType()->castTo<AnyBuiltinIntegerType>()->getWidth();
   return width.parse(getDigitsText(), /*radix*/ 0, isNegative());
 }
@@ -959,8 +886,16 @@ llvm::APFloat FloatLiteralExpr::getValue() const {
   assert(!getType().isNull() && "Semantic analysis has not completed");
   assert(!getType()->hasError() && "Should have a valid type");
 
-  return getFloatLiteralValue(isNegative(), getDigitsText(),
-                  getType()->castTo<BuiltinFloatType>()->getAPFloatSemantics());
+  Type ty = getType();
+  if (!ty->is<BuiltinFloatType>()) {
+    assert(!getBuiltinType().isNull() && "Semantic analysis has not completed");
+    assert(!getBuiltinType()->hasError() && "Should have a valid type");
+    ty = getBuiltinType();
+  }
+
+  return getFloatLiteralValue(
+      isNegative(), getDigitsText(),
+      ty->castTo<BuiltinFloatType>()->getAPFloatSemantics());
 }
 
 StringLiteralExpr::StringLiteralExpr(StringRef Val, SourceRange Range,
@@ -1064,23 +999,16 @@ computeSingleArgumentType(ASTContext &ctx, Expr *arg, bool implicit,
   arg->setType(TupleType::get(typeElements, ctx));
 }
 
-/// Pack the argument information into a single argument, to match the
-/// representation expected by the AST.
-///
-/// \param argLabels The argument labels, which might be updated by this
-/// function.
-///
-/// \param argLabelLocs The argument label locations, which might be updated by
-/// this function.
-static Expr *
-packSingleArgument(ASTContext &ctx, SourceLoc lParenLoc, ArrayRef<Expr *> args,
-                   ArrayRef<Identifier> &argLabels,
-                   ArrayRef<SourceLoc> &argLabelLocs, SourceLoc rParenLoc,
-                   Expr *trailingClosure, bool implicit,
-                   SmallVectorImpl<Identifier> &argLabelsScratch,
-                   SmallVectorImpl<SourceLoc> &argLabelLocsScratch,
-                   llvm::function_ref<Type(const Expr *)> getType =
-                       [](const Expr *E) -> Type { return E->getType(); }) {
+Expr *
+swift::packSingleArgument(ASTContext &ctx, SourceLoc lParenLoc,
+                          ArrayRef<Expr *> args,
+                          ArrayRef<Identifier> &argLabels,
+                          ArrayRef<SourceLoc> &argLabelLocs,
+                          SourceLoc rParenLoc,
+                          Expr *trailingClosure, bool implicit,
+                          SmallVectorImpl<Identifier> &argLabelsScratch,
+                          SmallVectorImpl<SourceLoc> &argLabelLocsScratch,
+                          llvm::function_ref<Type(const Expr *)> getType) {
   // Clear out our scratch space.
   argLabelsScratch.clear();
   argLabelLocsScratch.clear();
@@ -1170,7 +1098,7 @@ ObjectLiteralExpr::ObjectLiteralExpr(SourceLoc PoundLoc, LiteralKind LitKind,
                                      bool hasTrailingClosure,
                                      bool implicit)
     : LiteralExpr(ExprKind::ObjectLiteral, implicit), 
-      Arg(Arg), SemanticExpr(nullptr), PoundLoc(PoundLoc) {
+      Arg(Arg), PoundLoc(PoundLoc) {
   Bits.ObjectLiteralExpr.LitKind = static_cast<unsigned>(LitKind);
   assert(getLiteralKind() == LitKind);
   Bits.ObjectLiteralExpr.NumArgLabels = argLabels.size();
@@ -1308,22 +1236,14 @@ CaptureListExpr *CaptureListExpr::create(ASTContext &ctx,
   return ::new(mem) CaptureListExpr(captureList, closureBody);
 }
 
-TupleShuffleExpr *TupleShuffleExpr::create(ASTContext &ctx,
-                                           Expr *subExpr,
-                                           ArrayRef<int> elementMapping,
-                                           TypeImpact typeImpact,
-                                           ConcreteDeclRef defaultArgsOwner,
-                                           ArrayRef<unsigned> VariadicArgs,
-                                           Type VarargsArrayTy,
-                                           ArrayRef<Expr *> CallerDefaultArgs,
-                                           Type ty) {
-  auto size = totalSizeToAlloc<Expr*, int, unsigned>(CallerDefaultArgs.size(),
-                                                     elementMapping.size(),
-                                                     VariadicArgs.size());
-  auto mem = ctx.Allocate(size, alignof(TupleShuffleExpr));
-  return ::new(mem) TupleShuffleExpr(subExpr, elementMapping, typeImpact,
-                                     defaultArgsOwner, VariadicArgs,
-                                     VarargsArrayTy, CallerDefaultArgs, ty);
+DestructureTupleExpr *
+DestructureTupleExpr::create(ASTContext &ctx,
+                             ArrayRef<OpaqueValueExpr *> destructuredElements,
+                             Expr *srcExpr, Expr *dstExpr, Type ty) {
+  auto size = totalSizeToAlloc<OpaqueValueExpr *>(destructuredElements.size());
+  auto mem = ctx.Allocate(size, alignof(DestructureTupleExpr));
+  return ::new(mem) DestructureTupleExpr(destructuredElements,
+                                         srcExpr, dstExpr, ty);
 }
 
 SourceRange TupleExpr::getSourceRange() const {
@@ -1452,6 +1372,32 @@ ArrayExpr *ArrayExpr::create(ASTContext &C, SourceLoc LBracketLoc,
                                                   CommaLocs.size());
   auto Mem = C.Allocate(Size, alignof(ArrayExpr));
   return new (Mem) ArrayExpr(LBracketLoc, Elements, CommaLocs, RBracketLoc, Ty);
+}
+
+Type ArrayExpr::getElementType() {
+  auto init = getInitializer();
+  if (!init)
+    return Type();
+
+  auto *decl = cast<ConstructorDecl>(init.getDecl());
+  return decl->getMethodInterfaceType()
+      ->getAs<AnyFunctionType>()
+      ->getParams()[0]
+      .getPlainType()
+      .subst(init.getSubstitutions());
+}
+
+Type DictionaryExpr::getElementType() {
+  auto init = getInitializer();
+  if (!init)
+    return Type();
+
+  auto *decl = cast<ConstructorDecl>(init.getDecl());
+  return decl->getMethodInterfaceType()
+      ->getAs<AnyFunctionType>()
+      ->getParams()[0]
+      .getPlainType()
+      .subst(init.getSubstitutions());
 }
 
 DictionaryExpr *DictionaryExpr::create(ASTContext &C, SourceLoc LBracketLoc,
@@ -1821,6 +1767,13 @@ RebindSelfInConstructorExpr::getCalledConstructor(bool &isChainToSuper) const {
       candidate = covariantExpr->getSubExpr();
       continue;
     }
+    
+    // Look through inject into optional expressions
+    if (auto injectIntoOptionalExpr
+        = dyn_cast<InjectIntoOptionalExpr>(candidate)) {
+      candidate = injectIntoOptionalExpr->getSubExpr();
+      continue;
+    }
     break;
   }
 
@@ -1865,6 +1818,15 @@ bool AbstractClosureExpr::hasSingleExpressionBody() const {
     return closure->hasSingleExpressionBody();
 
   return true;
+}
+
+Expr *AbstractClosureExpr::getSingleExpressionBody() const {
+  if (auto closure = dyn_cast<ClosureExpr>(this))
+    return closure->getSingleExpressionBody();
+  else if (auto autoclosure = dyn_cast<AutoClosureExpr>(this))
+    return autoclosure->getSingleExpressionBody();
+
+  return nullptr;
 }
 
 #define FORWARD_SOURCE_LOCS_TO(CLASS, NODE) \
@@ -2091,11 +2053,11 @@ bool Expr::isSelfExprOf(const AbstractFunctionDecl *AFD, bool sameBase) const {
   return false;
 }
 
-ArchetypeType *OpenExistentialExpr::getOpenedArchetype() const {
+OpenedArchetypeType *OpenExistentialExpr::getOpenedArchetype() const {
   auto type = getOpaqueValue()->getType()->getRValueType();
   while (auto metaTy = type->getAs<MetatypeType>())
     type = metaTy->getInstanceType();
-  return type->castTo<ArchetypeType>();
+  return type->castTo<OpenedArchetypeType>();
 }
 
 KeyPathExpr::KeyPathExpr(ASTContext &C, SourceLoc keywordLoc,
@@ -2184,6 +2146,7 @@ KeyPathExpr::Component::Component(ASTContext *ctxForCopyingLabels,
     : Decl(decl), SubscriptIndexExpr(indexExpr), KindValue(kind),
       ComponentType(type), Loc(loc)
 {
+  assert(kind != Kind::TupleElement || subscriptLabels.empty());
   assert(subscriptLabels.size() == indexHashables.size()
          || indexHashables.empty());
   SubscriptLabelsData = subscriptLabels.data();
@@ -2220,6 +2183,7 @@ void KeyPathExpr::Component::setSubscriptIndexHashableConformances(
   case Kind::UnresolvedProperty:
   case Kind::Property:
   case Kind::Identity:
+  case Kind::TupleElement:
     llvm_unreachable("no hashable conformances for this kind");
   }
 }
@@ -2227,16 +2191,6 @@ void KeyPathExpr::Component::setSubscriptIndexHashableConformances(
 void InterpolatedStringLiteralExpr::forEachSegment(ASTContext &Ctx, 
     llvm::function_ref<void(bool, CallExpr *)> callback) {
   auto appendingExpr = getAppendingExpr();
-  if (SemanticExpr) {
-    SemanticExpr->forEachChildExpr([&](Expr *subExpr) -> Expr * {
-      if (auto tap = dyn_cast_or_null<TapExpr>(subExpr)) {
-        appendingExpr = tap;
-        return nullptr;
-      }
-      return subExpr;
-    });
-  }
-
   for (auto stmt : appendingExpr->getBody()->getElements()) {
     if (auto expr = stmt.dyn_cast<Expr*>()) {
       if (auto call = dyn_cast<CallExpr>(expr)) {

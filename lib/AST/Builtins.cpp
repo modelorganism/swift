@@ -14,13 +14,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "swift/AST/GenericSignatureBuilder.h"
-#include "swift/Basic/LLVMContext.h"
-#include "swift/AST/ASTContext.h"
 #include "swift/AST/Builtins.h"
+#include "swift/AST/ASTContext.h"
+#include "swift/AST/GenericEnvironment.h"
+#include "swift/AST/GenericSignatureBuilder.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/ParameterList.h"
-#include "swift/AST/GenericEnvironment.h"
+#include "swift/Basic/LLVMContext.h"
+#include "swift/Strings.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/Attributes.h"
@@ -45,10 +46,12 @@ bool BuiltinInfo::isReadNone() const {
 }
 
 bool IntrinsicInfo::hasAttribute(llvm::Attribute::AttrKind Kind) const {
-  // FIXME: We should not be relying on the global LLVM context.
-  llvm::AttributeList attrs =
-      llvm::Intrinsic::getAttributes(getGlobalLLVMContext(), ID);
-  return (attrs.hasAttribute(llvm::AttributeList::FunctionIndex, Kind));
+  using DenseMapInfo = llvm::DenseMapInfo<llvm::AttributeList>;
+  if (DenseMapInfo::isEqual(Attrs, DenseMapInfo::getEmptyKey())) {
+    // FIXME: We should not be relying on the global LLVM context.
+    Attrs = llvm::Intrinsic::getAttributes(getGlobalLLVMContext(), ID);
+  }
+  return Attrs.hasFnAttribute(Kind);
 }
 
 Type swift::getBuiltinType(ASTContext &Context, StringRef Name) {
@@ -157,7 +160,7 @@ getBuiltinFunction(Identifier Id, ArrayRef<Type> argTypes, Type ResType,
   SmallVector<ParamDecl*, 4> params;
   for (Type argType : argTypes) {
     auto PD = new (Context)
-        ParamDecl(VarDecl::Specifier::Default, SourceLoc(), SourceLoc(),
+        ParamDecl(ParamDecl::Specifier::Default, SourceLoc(), SourceLoc(),
                   Identifier(), SourceLoc(), Identifier(), DC);
     PD->setInterfaceType(argType);
     PD->setValidationToChecked();
@@ -200,7 +203,7 @@ getBuiltinGenericFunction(Identifier Id,
   for (unsigned i = 0, e = ArgParamTypes.size(); i < e; i++) {
     auto paramIfaceType = ArgParamTypes[i].getPlainType();
     auto specifier =
-      VarDecl::getParameterSpecifierForValueOwnership(
+      ParamDecl::getParameterSpecifierForValueOwnership(
         ArgParamTypes[i].getParameterFlags().getValueOwnership());
     auto PD = new (Context) ParamDecl(specifier,
                                       SourceLoc(), SourceLoc(),
@@ -949,6 +952,13 @@ static ValueDecl *getGetObjCTypeEncodingOperation(ASTContext &Context,
   return builder.build(Id);
 }
 
+static ValueDecl *getGlobalStringTablePointer(ASTContext &Context,
+                                              Identifier Id) {
+  // String -> Builtin.RawPointer
+  auto stringType = NominalType::get(Context.getStringDecl(), Type(), Context);
+  return getBuiltinFunction(Id, {stringType}, Context.TheRawPointerType);
+}
+
 static ValueDecl *getPoundAssert(ASTContext &Context, Identifier Id) {
   auto int1Type = BuiltinIntegerType::get(1, Context);
   auto optionalRawPointerType = BoundGenericEnumType::get(
@@ -1010,6 +1020,12 @@ static ValueDecl *getTypeJoinMetaOperation(ASTContext &Context, Identifier Id) {
   return builder.build(Id);
 }
 
+static ValueDecl *getTriggerFallbackDiagnosticOperation(ASTContext &Context,
+                                                        Identifier Id) {
+  // () -> Void
+  return getBuiltinFunction(Id, {}, Context.TheEmptyTupleType);
+}
+
 static ValueDecl *getCanBeObjCClassOperation(ASTContext &Context,
                                              Identifier Id) {
   // <T> T.Type -> Builtin.Int8
@@ -1019,11 +1035,19 @@ static ValueDecl *getCanBeObjCClassOperation(ASTContext &Context,
   return builder.build(Id);
 }
 
-static ValueDecl *getCondFailOperation(ASTContext &C, Identifier Id) {
+static ValueDecl *getLegacyCondFailOperation(ASTContext &C, Identifier Id) {
   // Int1 -> ()
   auto CondTy = BuiltinIntegerType::get(1, C);
   auto VoidTy = TupleType::getEmpty(C);
   return getBuiltinFunction(Id, {CondTy}, VoidTy);
+}
+
+static ValueDecl *getCondFailOperation(ASTContext &C, Identifier Id) {
+  // Int1 -> ()
+  auto CondTy = BuiltinIntegerType::get(1, C);
+  auto MsgTy = C.TheRawPointerType;
+  auto VoidTy = TupleType::getEmpty(C);
+  return getBuiltinFunction(Id, {CondTy, MsgTy}, VoidTy);
 }
 
 static ValueDecl *getAssertConfOperation(ASTContext &C, Identifier Id) {
@@ -1104,19 +1128,6 @@ static ValueDecl *getCheckedTruncOperation(ASTContext &Context, Identifier Id,
   TupleTypeElt ResultElts[] = { Type(OutTy), OverflowBitTy };
   Type ResultTy = TupleType::get(ResultElts, Context);
   return getBuiltinFunction(Id, { InTy }, ResultTy);
-}
-
-static ValueDecl *getCheckedConversionOperation(ASTContext &Context,
-                                                Identifier Id,
-                                                Type Ty) {
-  Type BuiltinTy = Ty->getAs<BuiltinIntegerType>();
-  if (!BuiltinTy)
-    return nullptr;
-
-  Type SignErrorBitTy = BuiltinIntegerType::get(1, Context);
-  TupleTypeElt ResultElts[] = { BuiltinTy, SignErrorBitTy };
-  Type ResultTy = TupleType::get(ResultElts, Context);
-  return getBuiltinFunction(Id, { BuiltinTy }, ResultTy);
 }
 
 static ValueDecl *getIntToFPWithOverflowOperation(ASTContext &Context,
@@ -1236,10 +1247,7 @@ static const char *const IntrinsicNameTable[] = {
 #include "llvm/IR/IntrinsicImpl.inc"
 #undef GET_INTRINSIC_TARGET_DATA
 
-/// getLLVMIntrinsicID - Given an LLVM IR intrinsic name with argument types
-/// removed (e.g. like "bswap") return the LLVM IR IntrinsicID for the intrinsic
-/// or 0 if the intrinsic name doesn't match anything.
-unsigned swift::getLLVMIntrinsicID(StringRef InName) {
+llvm::Intrinsic::ID swift::getLLVMIntrinsicID(StringRef InName) {
   using namespace llvm;
 
   // Swift intrinsic names start with int_.
@@ -1280,46 +1288,138 @@ swift::getLLVMIntrinsicIDForBuiltinWithOverflow(BuiltinValueKind ID) {
   llvm_unreachable("Cannot convert the overflow builtin to llvm intrinsic.");
 }
 
-static Type DecodeIntrinsicType(ArrayRef<llvm::Intrinsic::IITDescriptor> &Table,
-                                ArrayRef<Type> Tys, ASTContext &Context) {
+namespace {
+
+class IntrinsicTypeDecoder {
+  ArrayRef<llvm::Intrinsic::IITDescriptor> &Table;
+  ArrayRef<Type> TypeArguments;
+  ASTContext &Context;
+public:
+  IntrinsicTypeDecoder(ArrayRef<llvm::Intrinsic::IITDescriptor> &table,
+                       ArrayRef<Type> typeArguments, ASTContext &ctx)
+    : Table(table), TypeArguments(typeArguments), Context(ctx) {}
+
+  Type decodeImmediate();
+
+  /// Return the type argument at the given index.
+  Type getTypeArgument(unsigned index) {
+    if (index >= TypeArguments.size())
+      return Type();
+    return TypeArguments[index];
+  }
+
+  /// Create a pointer type.
+  Type makePointer(Type eltType, unsigned addrspace) {
+    // Reject non-default address space pointers.
+    if (addrspace)
+      return Type();
+
+    // For now, always ignore the element type and use RawPointer.
+    return Context.TheRawPointerType;
+  }
+
+  /// Create a vector type.
+  Type makeVector(Type eltType, unsigned width) {
+    return BuiltinVectorType::get(Context, eltType, width);
+  }
+
+  /// Return the first type or, if the second type is a vector type, a vector
+  /// of the first type of the same length as the second type.
+  Type maybeMakeVectorized(Type eltType, Type maybeVectorType) {
+    if (auto vectorType = maybeVectorType->getAs<BuiltinVectorType>()) {
+      return makeVector(eltType, vectorType->getNumElements());
+    }
+    return eltType;
+  }
+};
+
+} // end anonymous namespace
+
+static Type DecodeIntrinsicType(ArrayRef<llvm::Intrinsic::IITDescriptor> &table,
+                                ArrayRef<Type> typeArguments, ASTContext &ctx) {
+  return IntrinsicTypeDecoder(table, typeArguments, ctx).decodeImmediate();
+}
+
+Type IntrinsicTypeDecoder::decodeImmediate() {
   typedef llvm::Intrinsic::IITDescriptor IITDescriptor;
   IITDescriptor D = Table.front();
   Table = Table.slice(1);
   switch (D.Kind) {
-  default:
-    llvm_unreachable("Unhandled case");
-  case IITDescriptor::Half:
   case IITDescriptor::MMX:
   case IITDescriptor::Metadata:
-  case IITDescriptor::Vector:
   case IITDescriptor::ExtendArgument:
   case IITDescriptor::TruncArgument:
+  case IITDescriptor::HalfVecArgument:
   case IITDescriptor::VarArg:
+  case IITDescriptor::Token:
+  case IITDescriptor::VecOfAnyPtrsToElt:
     // These types cannot be expressed in swift yet.
     return Type();
 
-  case IITDescriptor::Void: return TupleType::getEmpty(Context);
-  case IITDescriptor::Float: return Context.TheIEEE32Type;
-  case IITDescriptor::Double: return Context.TheIEEE64Type;
-
+  // Fundamental types.
+  case IITDescriptor::Void:
+    return TupleType::getEmpty(Context);
+  case IITDescriptor::Half:
+    return Context.TheIEEE16Type;
+  case IITDescriptor::Float:
+    return Context.TheIEEE32Type;
+  case IITDescriptor::Double:
+    return Context.TheIEEE64Type;
+  case IITDescriptor::Quad:
+    return Context.TheIEEE128Type;
   case IITDescriptor::Integer:
     return BuiltinIntegerType::get(D.Integer_Width, Context);
-  case IITDescriptor::Pointer:
-    if (D.Pointer_AddressSpace)
-      return Type();  // Reject non-default address space pointers.
-      
-    // Decode but ignore the pointee.  Just decode all IR pointers to unsafe
-    // pointer type.
-    (void)DecodeIntrinsicType(Table, Tys, Context);
-    return Context.TheRawPointerType;
+
+  // A vector of an immediate type.
+  case IITDescriptor::Vector: {
+    Type eltType = decodeImmediate();
+    if (!eltType) return Type();
+    return makeVector(eltType, D.Vector_Width);
+  }
+
+  // A pointer to an immediate type.
+  case IITDescriptor::Pointer: {
+    Type pointeeType = decodeImmediate();
+    if (!pointeeType) return Type();
+    return makePointer(pointeeType, D.Pointer_AddressSpace);
+  }
+
+  // A type argument.
   case IITDescriptor::Argument:
-    if (D.getArgumentNumber() >= Tys.size())
-      return Type();
-    return Tys[D.getArgumentNumber()];
+    return getTypeArgument(D.getArgumentNumber());
+
+  // A pointer to a type argument.
+  case IITDescriptor::PtrToArgument: {
+    Type argType = getTypeArgument(D.getArgumentNumber());
+    if (!argType) return Type();
+    unsigned addrspace = 0; // An apparent limitation of LLVM.
+    return makePointer(argType, addrspace);
+  }
+
+  // A vector of the same width as a type argument.
+  case IITDescriptor::SameVecWidthArgument: {
+    Type maybeVectorType = getTypeArgument(D.getArgumentNumber());
+    if (!maybeVectorType) return Type();
+    Type eltType = decodeImmediate();
+    if (!eltType) return Type();
+    return maybeMakeVectorized(eltType, maybeVectorType);
+  }
+
+  // A pointer to the element type of a type argument, which must be a vector.
+  case IITDescriptor::PtrToElt: {
+    Type argType = getTypeArgument(D.getArgumentNumber());
+    if (!argType) return Type();
+    auto vecType = argType->getAs<BuiltinVectorType>();
+    if (!vecType) return Type();
+    unsigned addrspace = 0; // An apparent limitation of LLVM.
+    return makePointer(vecType->getElementType(), addrspace);
+  }
+
+  // A struct, which we translate as a tuple.
   case IITDescriptor::Struct: {
     SmallVector<TupleTypeElt, 5> Elts;
     for (unsigned i = 0; i != D.Struct_NumElements; ++i) {
-      Type T = DecodeIntrinsicType(Table, Tys, Context);
+      Type T = decodeImmediate();
       if (!T) return Type();
       
       Elts.push_back(T);
@@ -1332,12 +1432,11 @@ static Type DecodeIntrinsicType(ArrayRef<llvm::Intrinsic::IITDescriptor> &Table,
 
 /// \returns true on success, false on failure.
 static bool
-getSwiftFunctionTypeForIntrinsic(unsigned iid, ArrayRef<Type> TypeArgs,
+getSwiftFunctionTypeForIntrinsic(llvm::Intrinsic::ID ID,
+                                 ArrayRef<Type> TypeArgs,
                                  ASTContext &Context,
                                  SmallVectorImpl<Type> &ArgElts,
-                                 Type &ResultTy, FunctionType::ExtInfo &Info) {
-  llvm::Intrinsic::ID ID = (llvm::Intrinsic::ID)iid;
-  
+                                 Type &ResultTy) {
   typedef llvm::Intrinsic::IITDescriptor IITDescriptor;
   SmallVector<IITDescriptor, 8> Table;
   getIntrinsicInfoTableEntries(ID, Table);
@@ -1359,7 +1458,6 @@ getSwiftFunctionTypeForIntrinsic(unsigned iid, ArrayRef<Type> TypeArgs,
   // Translate LLVM function attributes to Swift function attributes.
   llvm::AttributeList attrs =
       llvm::Intrinsic::getAttributes(getGlobalLLVMContext(), ID);
-  Info = FunctionType::ExtInfo();
   if (attrs.hasAttribute(llvm::AttributeList::FunctionIndex,
                          llvm::Attribute::NoReturn)) {
     ResultTy = Context.getNeverType();
@@ -1445,18 +1543,20 @@ static bool isValidCmpXChgOrdering(StringRef SuccessString,
 }
 
 ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
+  #if SWIFT_BUILD_ONLY_SYNTAXPARSERLIB
+    return nullptr; // not needed for the parser library.
+  #endif
+
   SmallVector<Type, 4> Types;
   StringRef OperationName = getBuiltinBaseName(Context, Id.str(), Types);
 
   // If this is the name of an LLVM intrinsic, cons up a swift function with a
   // type that matches the IR types.
-  if (unsigned ID = getLLVMIntrinsicID(OperationName)) {
+  if (llvm::Intrinsic::ID ID = getLLVMIntrinsicID(OperationName)) {
     SmallVector<Type, 8> ArgElts;
     Type ResultTy;
-    FunctionType::ExtInfo Info;
-    if (getSwiftFunctionTypeForIntrinsic(ID, Types, Context, ArgElts, ResultTy,
-                                         Info))
-      return getBuiltinFunction(Id, ArgElts, ResultTy, Info);
+    if (getSwiftFunctionTypeForIntrinsic(ID, Types, Context, ArgElts, ResultTy))
+      return getBuiltinFunction(Id, ArgElts, ResultTy);
   }
   
   // If this starts with fence, we have special suffixes to handle.
@@ -1797,11 +1897,14 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
     if (!Types.empty()) return nullptr;
     return getAddressOfOperation(Context, Id);
 
+  case BuiltinValueKind::LegacyCondFail:
+    return getLegacyCondFailOperation(Context, Id);
+
   case BuiltinValueKind::AddressOfBorrow:
     if (!Types.empty()) return nullptr;
     return getAddressOfBorrowOperation(Context, Id);
 
-  case BuiltinValueKind::CondFail:
+  case BuiltinValueKind::CondFailMessage:
     return getCondFailOperation(Context, Id);
 
   case BuiltinValueKind::AssertConf:
@@ -1853,11 +1956,6 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
     if (Types.size() != 2) return nullptr;
     return getCheckedTruncOperation(Context, Id, Types[0], Types[1], false);
 
-  case BuiltinValueKind::SUCheckedConversion:
-  case BuiltinValueKind::USCheckedConversion:
-    if (Types.size() != 1) return nullptr;
-    return getCheckedConversionOperation(Context, Id, Types[0]);
-
   case BuiltinValueKind::ClassifyBridgeObject:
     if (!Types.empty()) return nullptr;
     return getClassifyBridgeObject(Context, Id);
@@ -1881,6 +1979,9 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
   case BuiltinValueKind::GetObjCTypeEncoding:
     return getGetObjCTypeEncodingOperation(Context, Id);
 
+  case BuiltinValueKind::GlobalStringTablePointer:
+    return getGlobalStringTablePointer(Context, Id);
+
   case BuiltinValueKind::PoundAssert:
     return getPoundAssert(Context, Id);
 
@@ -1899,7 +2000,10 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
     return getTypeJoinInoutOperation(Context, Id);
 
   case BuiltinValueKind::TypeJoinMeta:
-    return getTypeJoinMetaOperation(Context, Id);      
+    return getTypeJoinMetaOperation(Context, Id);
+
+  case BuiltinValueKind::TriggerFallbackDiagnostic:
+    return getTriggerFallbackDiagnosticOperation(Context, Id);
   }
 
   llvm_unreachable("bad builtin value!");
@@ -1915,4 +2019,104 @@ StringRef swift::getBuiltinName(BuiltinValueKind ID) {
 #include "swift/AST/Builtins.def"
   }
   llvm_unreachable("bad BuiltinValueKind");
+}
+
+BuiltinTypeKind BuiltinType::getBuiltinTypeKind() const {
+  // If we do not have a vector or an integer our job is easy.
+  return BuiltinTypeKind(std::underlying_type<TypeKind>::type(getKind()));
+}
+
+StringRef BuiltinType::getTypeName(SmallVectorImpl<char> &result,
+                                   bool prependBuiltinNamespace) const {
+#ifdef MAYBE_GET_NAMESPACED_BUILTIN
+#error                                                                         \
+    "We define MAYBE_GET_NAMESPACED_BUILTIN here. Do not define before this?!"
+#endif
+#define MAYBE_GET_NAMESPACED_BUILTIN(NAME)                                     \
+  ((prependBuiltinNamespace) ? NAME : NAME.getWithoutPrefix())
+
+  llvm::raw_svector_ostream printer(result);
+  switch (getBuiltinTypeKind()) {
+  case BuiltinTypeKind::BuiltinRawPointer:
+    printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_RAWPOINTER);
+    break;
+  case BuiltinTypeKind::BuiltinNativeObject:
+    printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_NATIVEOBJECT);
+    break;
+  case BuiltinTypeKind::BuiltinUnknownObject:
+    printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_UNKNOWNOBJECT);
+    break;
+  case BuiltinTypeKind::BuiltinBridgeObject:
+    printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_BRIDGEOBJECT);
+    break;
+  case BuiltinTypeKind::BuiltinUnsafeValueBuffer:
+    printer << MAYBE_GET_NAMESPACED_BUILTIN(
+        BUILTIN_TYPE_NAME_UNSAFEVALUEBUFFER);
+    break;
+  case BuiltinTypeKind::BuiltinIntegerLiteral:
+    printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_INTLITERAL);
+    break;
+  case BuiltinTypeKind::BuiltinVector: {
+    const auto *t = cast<const BuiltinVectorType>(this);
+    llvm::SmallString<32> UnderlyingStrVec;
+    StringRef UnderlyingStr;
+    {
+      // FIXME: Ugly hack: remove the .Builtin from the element type.
+      {
+        llvm::raw_svector_ostream UnderlyingOS(UnderlyingStrVec);
+        t->getElementType().print(UnderlyingOS);
+      }
+      if (UnderlyingStrVec.startswith(BUILTIN_TYPE_NAME_PREFIX))
+        UnderlyingStr = UnderlyingStrVec.substr(8);
+      else
+        UnderlyingStr = UnderlyingStrVec;
+    }
+
+    printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_VEC)
+            << t->getNumElements() << "x" << UnderlyingStr;
+    break;
+  }
+  case BuiltinTypeKind::BuiltinInteger: {
+    auto width = cast<const BuiltinIntegerType>(this)->getWidth();
+    if (width.isFixedWidth()) {
+      printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_INT)
+              << width.getFixedWidth();
+      break;
+    }
+
+    if (width.isPointerWidth()) {
+      printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_WORD);
+      break;
+    }
+
+    llvm_unreachable("impossible bit width");
+  }
+  case BuiltinTypeKind::BuiltinFloat: {
+    switch (cast<const BuiltinFloatType>(this)->getFPKind()) {
+    case BuiltinFloatType::IEEE16:
+      printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_FLOAT) << "16";
+      break;
+    case BuiltinFloatType::IEEE32:
+      printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_FLOAT) << "32";
+      break;
+    case BuiltinFloatType::IEEE64:
+      printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_FLOAT) << "64";
+      break;
+    case BuiltinFloatType::IEEE80:
+      printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_FLOAT) << "80";
+      break;
+    case BuiltinFloatType::IEEE128:
+      printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_FLOAT) << "128";
+      break;
+    case BuiltinFloatType::PPC128:
+      printer << MAYBE_GET_NAMESPACED_BUILTIN(BUILTIN_TYPE_NAME_FLOAT_PPC)
+              << "128";
+      break;
+    }
+    break;
+  }
+  }
+#undef MAYBE_GET_NAMESPACED_BUILTIN
+
+  return printer.str();
 }

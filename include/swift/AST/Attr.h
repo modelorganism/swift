@@ -32,6 +32,7 @@
 #include "swift/AST/Ownership.h"
 #include "swift/AST/PlatformKind.h"
 #include "swift/AST/Requirement.h"
+#include "swift/AST/TrailingCallArguments.h"
 #include "swift/AST/TypeLoc.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -49,6 +50,7 @@ class FuncDecl;
 class ClassDecl;
 class GenericFunctionType;
 class LazyConformanceLoader;
+class PatternBindingInitializer;
 class TrailingWhereClause;
 
 /// TypeAttributes - These are attributes that may be applied to types.
@@ -65,6 +67,14 @@ public:
 
   // For an opened existential type, the known ID.
   Optional<UUID> OpenedID;
+  
+  // For a reference to an opaque return type, the mangled name and argument
+  // index into the generic signature.
+  struct OpaqueReturnTypeRef {
+    StringRef mangledName;
+    unsigned index;
+  };
+  Optional<OpaqueReturnTypeRef> OpaqueReturnTypeOf;
 
   TypeAttributes() {}
   
@@ -80,6 +90,10 @@ public:
   
   SourceLoc getLoc(TypeAttrKind A) const {
     return AttrLocs[A];
+  }
+  
+  void setOpaqueReturnTypeOf(StringRef mangling, unsigned index) {
+    OpaqueReturnTypeOf = OpaqueReturnTypeRef{mangling, index};
   }
   
   void setAttr(TypeAttrKind A, SourceLoc L) {
@@ -616,6 +630,10 @@ enum class PlatformAgnosticAvailabilityKind {
   /// The declaration is available in some but not all versions
   /// of Swift, as specified by the VersionTuple members.
   SwiftVersionSpecific,
+  /// The declaration is available in some but not all versions
+  /// of SwiftPM's PackageDescription library, as specified by
+  /// the VersionTuple members.
+  PackageDescriptionVersionSpecific,
   /// The declaration is unavailable for other reasons.
   Unavailable,
 };
@@ -686,6 +704,9 @@ public:
   /// Whether this is a language-version-specific entity.
   bool isLanguageVersionSpecific() const;
 
+  /// Whether this is a PackageDescription version specific entity.
+  bool isPackageDescriptionVersionSpecific() const;
+
   /// Whether this is an unconditionally unavailable entity.
   bool isUnconditionallyUnavailable() const;
 
@@ -721,6 +742,12 @@ public:
 
   /// Returns true if this attribute is active given the current platform.
   bool isActivePlatform(const ASTContext &ctx) const;
+
+  /// Returns the active version from the AST context corresponding to
+  /// the available kind. For example, this will return the effective language
+  /// version for swift version-specific availability kind, PackageDescription
+  /// version for PackageDescription version-specific availability.
+  llvm::VersionTuple getActiveVersion(const ASTContext &ctx) const;
 
   /// Compare this attribute's version information against the platform or
   /// language version (assuming the this attribute pertains to the active
@@ -1395,7 +1422,84 @@ public:
   }
 };
 
-/// \brief Attributes that may be applied to declarations.
+/// Defines a custom attribute.
+class CustomAttr final : public DeclAttribute,
+                         public TrailingCallArguments<CustomAttr> {
+  TypeLoc type;
+  Expr *arg;
+  PatternBindingInitializer *initContext;
+  Expr *semanticInit = nullptr;
+
+  unsigned hasArgLabelLocs : 1;
+  unsigned numArgLabels : 16;
+
+  CustomAttr(SourceLoc atLoc, SourceRange range, TypeLoc type,
+             PatternBindingInitializer *initContext, Expr *arg,
+             ArrayRef<Identifier> argLabels, ArrayRef<SourceLoc> argLabelLocs,
+             bool implicit);
+
+public:
+  static CustomAttr *create(ASTContext &ctx, SourceLoc atLoc, TypeLoc type,
+                            bool implicit = false) {
+    return create(ctx, atLoc, type, false, nullptr, SourceLoc(), { }, { }, { },
+                  SourceLoc(), implicit);
+  }
+
+  static CustomAttr *create(ASTContext &ctx, SourceLoc atLoc, TypeLoc type,
+                            bool hasInitializer,
+                            PatternBindingInitializer *initContext,
+                            SourceLoc lParenLoc,
+                            ArrayRef<Expr *> args,
+                            ArrayRef<Identifier> argLabels,
+                            ArrayRef<SourceLoc> argLabelLocs,
+                            SourceLoc rParenLoc,
+                            bool implicit = false);
+
+  unsigned getNumArguments() const { return numArgLabels; }
+  bool hasArgumentLabelLocs() const { return hasArgLabelLocs; }
+
+  TypeLoc &getTypeLoc() { return type; }
+  const TypeLoc &getTypeLoc() const { return type; }
+
+  Expr *getArg() const { return arg; }
+  void setArg(Expr *newArg) { arg = newArg; }
+
+  Expr *getSemanticInit() const { return semanticInit; }
+  void setSemanticInit(Expr *expr) { semanticInit = expr; }
+
+  PatternBindingInitializer *getInitContext() const { return initContext; }
+
+  static bool classof(const DeclAttribute *DA) {
+    return DA->getKind() == DAK_Custom;
+  }
+};
+
+/// Relates a property to its projection value property, as described by a property wrapper. For
+/// example, given
+/// \code
+/// @A var foo: Int
+/// \endcode
+///
+/// Where \c A is a property wrapper that has a \c projectedValue property, the compiler
+/// synthesizes a declaration $foo an attaches the attribute
+/// \c _projectedValuePropertyAttr($foo) to \c foo to record the link.
+class ProjectedValuePropertyAttr : public DeclAttribute {
+public:
+  ProjectedValuePropertyAttr(Identifier PropertyName,
+                              SourceLoc AtLoc, SourceRange Range,
+                              bool Implicit)
+    : DeclAttribute(DAK_ProjectedValueProperty, AtLoc, Range, Implicit),
+      ProjectionPropertyName(PropertyName) {}
+
+  // The projection property name.
+  const Identifier ProjectionPropertyName;
+
+  static bool classof(const DeclAttribute *DA) {
+    return DA->getKind() == DAK_ProjectedValueProperty;
+  }
+};
+
+/// Attributes that may be applied to declarations.
 class DeclAttributes {
   /// Linked list of declaration attributes.
   DeclAttribute *DeclAttrs;
@@ -1434,6 +1538,11 @@ public:
   isUnavailableInSwiftVersion(const version::Version &effectiveVersion) const;
 
   /// Returns the first @available attribute that indicates
+  /// a declaration is unavailable, or the first one that indicates it's
+  /// potentially unavailable, or null otherwise.
+  const AvailableAttr *getPotentiallyUnavailable(const ASTContext &ctx) const;
+
+  /// Returns the first @available attribute that indicates
   /// a declaration is unavailable, or null otherwise.
   const AvailableAttr *getUnavailable(const ASTContext &ctx) const;
 
@@ -1444,6 +1553,9 @@ public:
   void dump(const Decl *D = nullptr) const;
   void print(ASTPrinter &Printer, const PrintOptions &Options,
              const Decl *D = nullptr) const;
+  static void print(ASTPrinter &Printer, const PrintOptions &Options,
+                    ArrayRef<const DeclAttribute *> FlattenedAttrs,
+                    const Decl *D = nullptr);
 
   template <typename T, typename DERIVED>
   class iterator_base : public std::iterator<std::forward_iterator_tag, T *> {
@@ -1565,6 +1677,12 @@ public:
 
   SourceLoc getStartLoc(bool forModifiers = false) const;
 };
+
+void simple_display(llvm::raw_ostream &out, const DeclAttribute *attr);
+
+inline SourceLoc extractNearestSourceLoc(const DeclAttribute *attr) {
+  return attr->getLocation();
+}
 
 } // end namespace swift
 

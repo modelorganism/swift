@@ -21,6 +21,7 @@
 #if SWIFT_OBJC_INTEROP
 #import <CoreFoundation/CoreFoundation.h>
 #include "../SwiftShims/CoreFoundationShims.h"
+#import <objc/runtime.h>
 
 using namespace swift;
 
@@ -76,10 +77,13 @@ swift::_swift_stdlib_CFStringGetLength(_swift_shims_CFStringRef theString) {
 
 _swift_shims_CFStringRef
 swift::_swift_stdlib_CFStringCreateWithSubstring(
-                                         _swift_shims_CFAllocatorRef alloc,
+                                         const void *unused,
                                          _swift_shims_CFStringRef str,
                                          _swift_shims_CFRange range) {
-  return cast(CFStringCreateWithSubstring(cast(alloc), cast(str), cast(range)));
+  assert(unused == NULL);
+  return cast(CFStringCreateWithSubstring(kCFAllocatorSystemDefault,
+                                          cast(str),
+                                          cast(range)));
 }
 
 _swift_shims_CFComparisonResult
@@ -107,17 +111,19 @@ swift::_swift_stdlib_CFStringGetCharacterAtIndex(_swift_shims_CFStringRef theStr
 }
 
 _swift_shims_CFStringRef
-swift::_swift_stdlib_CFStringCreateCopy(_swift_shims_CFAllocatorRef alloc,
+swift::_swift_stdlib_CFStringCreateCopy(const void *unused,
                                         _swift_shims_CFStringRef theString) {
-  return cast(CFStringCreateCopy(cast(alloc), cast(theString)));
+  assert(unused == NULL);
+  return cast(CFStringCreateCopy(kCFAllocatorSystemDefault, cast(theString)));
 }
 
 _swift_shims_CFStringRef
 swift::_swift_stdlib_CFStringCreateWithBytes(
-    _swift_shims_CFAllocatorRef _Nullable alloc, const uint8_t *bytes,
+    const void *unused, const uint8_t *bytes,
     _swift_shims_CFIndex numBytes, _swift_shims_CFStringEncoding encoding,
     _swift_shims_Boolean isExternalRepresentation) {
-  return cast(CFStringCreateWithBytes(cast(alloc), bytes, numBytes,
+  assert(unused == NULL);
+  return cast(CFStringCreateWithBytes(kCFAllocatorSystemDefault, bytes, numBytes,
                                       cast(encoding),
                                       isExternalRepresentation));
 }
@@ -146,6 +152,37 @@ _swift_shims_CFHashCode
 swift::_swift_stdlib_CFStringHashCString(const _swift_shims_UInt8 * _Nonnull bytes,
                                   _swift_shims_CFIndex length) {
   return CFStringHashCString(bytes, length);
+}
+
+const __swift_uint8_t *
+swift::_swift_stdlib_NSStringCStringUsingEncodingTrampoline(id _Nonnull obj,
+                                                  unsigned long encoding) {
+  typedef __swift_uint8_t * _Nullable (*cStrImplPtr)(id, SEL, unsigned long);
+  cStrImplPtr imp = (cStrImplPtr)class_getMethodImplementation([obj superclass],
+                                                               @selector(cStringUsingEncoding:));
+  return imp(obj, @selector(cStringUsingEncoding:), encoding);
+}
+
+__swift_uint8_t
+swift::_swift_stdlib_NSStringGetCStringTrampoline(id _Nonnull obj,
+                                         _swift_shims_UInt8 *buffer,
+                                         _swift_shims_CFIndex maxLength,
+                                         unsigned long encoding) {
+  typedef __swift_uint8_t (*getCStringImplPtr)(id,
+                                             SEL,
+                                             _swift_shims_UInt8 *,
+                                             _swift_shims_CFIndex,
+                                             unsigned long);
+  SEL sel = @selector(getCString:maxLength:encoding:);
+  getCStringImplPtr imp = (getCStringImplPtr)class_getMethodImplementation([obj superclass], sel);
+  
+  return imp(obj, sel, buffer, maxLength, encoding);
+
+}
+
+__swift_uintptr_t
+swift::_swift_stdlib_unsafeAddressOfClass(id _Nonnull obj) {
+  return (__swift_uintptr_t)object_getClass(obj); //TODO: do direct isa access when in the OS
 }
 
 

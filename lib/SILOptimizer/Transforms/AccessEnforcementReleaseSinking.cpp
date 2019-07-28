@@ -122,8 +122,6 @@ static bool isBarrier(SILInstruction *inst) {
     case BuiltinValueKind::SToUCheckedTrunc:
     case BuiltinValueKind::SToSCheckedTrunc:
     case BuiltinValueKind::UToUCheckedTrunc:
-    case BuiltinValueKind::SUCheckedConversion:
-    case BuiltinValueKind::USCheckedConversion:
     case BuiltinValueKind::IntToFPWithOverflow:
     case BuiltinValueKind::ZeroInitializer:
     case BuiltinValueKind::Once:
@@ -131,7 +129,9 @@ static bool isBarrier(SILInstruction *inst) {
     case BuiltinValueKind::GetObjCTypeEncoding:
     case BuiltinValueKind::Swift3ImplicitObjCEntrypoint:
     case BuiltinValueKind::WillThrow:
+    case BuiltinValueKind::CondFailMessage:
     case BuiltinValueKind::PoundAssert:
+    case BuiltinValueKind::GlobalStringTablePointer:
       return false;
 
     // Handle some rare builtins that may be sensitive to object lifetime
@@ -217,6 +217,10 @@ struct AccessEnforcementReleaseSinking : public SILFunctionTransform {
   void run() override {
     SILFunction *F = getFunction();
     if (F->empty())
+      return;
+
+    // FIXME: Support ownership.
+    if (F->hasOwnership())
       return;
 
     LLVM_DEBUG(llvm::dbgs() << "Running AccessEnforcementReleaseSinking on "

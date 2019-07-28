@@ -22,14 +22,12 @@ import TestsUtils
 // 11% _swift_stdlib_makeAnyHashableUpcastingToHashableBaseType
 // 16% _swift_retain_[n]
 //  5% swift_conformsToProtocol
-public var AnyHashableWithAClass = BenchmarkInfo(
+public let AnyHashableWithAClass = BenchmarkInfo(
   name: "AnyHashableWithAClass",
   runFunction: run_AnyHashableWithAClass,
   tags: [.abstraction, .runtime, .cpubench],
-  legacyFactor: lf
+  legacyFactor: 500
 )
-
-let lf = 500
 
 class TestHashableBase : Hashable {
   var value: Int
@@ -58,7 +56,7 @@ class TestHashableDerived5 : TestHashableDerived4 {}
 @inline(never)
 public func run_AnyHashableWithAClass(_ N: Int) {
   let c = TestHashableDerived5(10)
-  for _ in 0...(N*500000/lf) {
+  for _ in 0...(N*1000) {
     _ = AnyHashable(c)
   }
 }

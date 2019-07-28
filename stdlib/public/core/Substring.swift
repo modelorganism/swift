@@ -20,7 +20,7 @@ extension String {
   /// - Complexity: O(*n*), where *n* is the length of `substring`.
   @inlinable
   public init(_ substring: __shared Substring) {
-    self = substring._withUTF8 { return String._uncheckedFromUTF8($0) }
+    self = String._fromSubstring(substring)
   }
 }
 
@@ -92,14 +92,20 @@ extension String {
 ///   when there is no other reference to the original string. Storing
 ///   substrings may, therefore, prolong the lifetime of string data that is
 ///   no longer otherwise accessible, which can appear to be memory leakage.
-@_fixed_layout
+@frozen
 public struct Substring {
   @usableFromInline
   internal var _slice: Slice<String>
 
-  @inlinable @inline(__always)
+  @inlinable
   internal init(_ slice: Slice<String>) {
-    self._slice = slice
+    let _guts = slice.base._guts
+    let start = _guts.scalarAlign(slice.startIndex)
+    let end = _guts.scalarAlign(slice.endIndex)
+
+    self._slice = Slice(
+      base: slice.base,
+      bounds: Range(uncheckedBounds: (start, end)))
     _invariantCheck()
   }
 
@@ -116,24 +122,17 @@ public struct Substring {
 }
 
 extension Substring {
-  @inlinable
-  internal var _wholeGuts: _StringGuts {
-    @inline(__always) get { return _slice.base._guts }
-  }
-  @inlinable
-  internal var _wholeString: String {
-    @inline(__always) get { return String(self._wholeGuts) }
-  }
+  /// Returns the underlying string from which this Substring was derived.
+  @_alwaysEmitIntoClient
+  public var base: String { return _slice.base }
 
-  @inlinable
+  @inlinable @inline(__always)
+  internal var _wholeGuts: _StringGuts { return base._guts }
+
+  @inlinable @inline(__always)
   internal var _offsetRange: Range<Int> {
-    @inline(__always) get {
-      let start = _slice.startIndex
-      let end = _slice.endIndex
-      _sanityCheck(start.transcodedOffset == 0 && end.transcodedOffset == 0)
-
-      return Range(uncheckedBounds: (start.encodedOffset, end.encodedOffset))
-    }
+    return Range(
+      uncheckedBounds: (startIndex._encodedOffset, endIndex._encodedOffset))
   }
 
   #if !INTERNAL_CHECKS_ENABLED
@@ -141,7 +140,12 @@ extension Substring {
   #else
   @usableFromInline @inline(never) @_effects(releasenone)
   internal func _invariantCheck() {
-    self._wholeString._invariantCheck()
+    // Indices are always scalar aligned
+    _internalInvariant(
+      _slice.startIndex == base._guts.scalarAlign(_slice.startIndex) &&
+      _slice.endIndex == base._guts.scalarAlign(_slice.endIndex))
+
+    self.base._invariantCheck()
   }
   #endif // INTERNAL_CHECKS_ENABLED
 }
@@ -150,14 +154,11 @@ extension Substring: StringProtocol {
   public typealias Index = String.Index
   public typealias SubSequence = Substring
 
-  @inlinable
-  public var startIndex: Index {
-    @inline(__always) get { return _slice.startIndex }
-  }
-  @inlinable
-  public var endIndex: Index {
-    @inline(__always) get { return _slice.endIndex }
-  }
+  @inlinable @inline(__always)
+  public var startIndex: Index { return _slice.startIndex }
+
+  @inlinable @inline(__always)
+  public var endIndex: Index { return _slice.endIndex }
 
   @inlinable @inline(__always)
   public func index(after i: Index) -> Index {
@@ -206,7 +207,7 @@ extension Substring: StringProtocol {
   public mutating func replaceSubrange<C>(
     _ bounds: Range<Index>,
     with newElements: C
-  ) where C : Collection, C.Iterator.Element == Iterator.Element {
+  ) where C: Collection, C.Iterator.Element == Iterator.Element {
     _slice.replaceSubrange(bounds, with: newElements)
   }
 
@@ -306,22 +307,20 @@ extension Substring: StringProtocol {
   }
 }
 
-extension Substring : CustomReflectable {
+extension Substring: CustomReflectable {
  public var customMirror: Mirror { return String(self).customMirror }
 }
 
-extension Substring : CustomStringConvertible {
-  @inlinable
-  public var description: String {
-    @inline(__always) get { return String(self) }
-  }
+extension Substring: CustomStringConvertible {
+  @inlinable @inline(__always)
+  public var description: String { return String(self) }
 }
 
-extension Substring : CustomDebugStringConvertible {
+extension Substring: CustomDebugStringConvertible {
   public var debugDescription: String { return String(self).debugDescription }
 }
 
-extension Substring : LosslessStringConvertible {
+extension Substring: LosslessStringConvertible {
   @inlinable
   public init(_ content: String) {
     self = content[...]
@@ -329,14 +328,14 @@ extension Substring : LosslessStringConvertible {
 }
 
 extension Substring {
-  @_fixed_layout // FIXME(sil-serialize-all)
+  @frozen
   public struct UTF8View {
-    @usableFromInline // FIXME(sil-serialize-all)
+    @usableFromInline
     internal var _slice: Slice<String.UTF8View>
   }
 }
 
-extension Substring.UTF8View : BidirectionalCollection {
+extension Substring.UTF8View: BidirectionalCollection {
   public typealias Index = String.UTF8View.Index
   public typealias Indices = String.UTF8View.Indices
   public typealias Element = String.UTF8View.Element
@@ -390,12 +389,12 @@ extension Substring.UTF8View : BidirectionalCollection {
     return _slice.distance(from: start, to: end)
   }
 
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable
   public func _failEarlyRangeCheck(_ index: Index, bounds: Range<Index>) {
     _slice._failEarlyRangeCheck(index, bounds: bounds)
   }
 
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable
   public func _failEarlyRangeCheck(
     _ range: Range<Index>, bounds: Range<Index>
   ) {
@@ -420,7 +419,7 @@ extension Substring {
   @inlinable
   public var utf8: UTF8View {
     get {
-      return _wholeString.utf8[startIndex..<endIndex]
+      return base.utf8[startIndex..<endIndex]
     }
     set {
       self = Substring(newValue)
@@ -455,14 +454,14 @@ extension String {
   }
 }
 extension Substring {
-  @_fixed_layout
+  @frozen
   public struct UTF16View {
     @usableFromInline
     internal var _slice: Slice<String.UTF16View>
   }
 }
 
-extension Substring.UTF16View : BidirectionalCollection {
+extension Substring.UTF16View: BidirectionalCollection {
   public typealias Index = String.UTF16View.Index
   public typealias Indices = String.UTF16View.Indices
   public typealias Element = String.UTF16View.Element
@@ -546,7 +545,7 @@ extension Substring {
   @inlinable
   public var utf16: UTF16View {
     get {
-      return _wholeString.utf16[startIndex..<endIndex]
+      return base.utf16[startIndex..<endIndex]
     }
     set {
       self = Substring(newValue)
@@ -581,14 +580,14 @@ extension String {
   }
 }
 extension Substring {
-  @_fixed_layout
+  @frozen
   public struct UnicodeScalarView {
     @usableFromInline
     internal var _slice: Slice<String.UnicodeScalarView>
   }
 }
 
-extension Substring.UnicodeScalarView : BidirectionalCollection {
+extension Substring.UnicodeScalarView: BidirectionalCollection {
   public typealias Index = String.UnicodeScalarView.Index
   public typealias Indices = String.UnicodeScalarView.Indices
   public typealias Element = String.UnicodeScalarView.Element
@@ -672,7 +671,7 @@ extension Substring {
   @inlinable
   public var unicodeScalars: UnicodeScalarView {
     get {
-      return _wholeString.unicodeScalars[startIndex..<endIndex]
+      return base.unicodeScalars[startIndex..<endIndex]
     }
     set {
       self = Substring(newValue)
@@ -700,22 +699,22 @@ extension String {
 }
 
 // FIXME: The other String views should be RangeReplaceable too.
-extension Substring.UnicodeScalarView : RangeReplaceableCollection {
+extension Substring.UnicodeScalarView: RangeReplaceableCollection {
   @inlinable
   public init() { _slice = Slice.init() }
 
-  public mutating func replaceSubrange<C : Collection>(
+  public mutating func replaceSubrange<C: Collection>(
     _ target: Range<Index>, with replacement: C
   ) where C.Element == Element {
     _slice.replaceSubrange(target, with: replacement)
   }
 }
 
-extension Substring : RangeReplaceableCollection {
+extension Substring: RangeReplaceableCollection {
   @_specialize(where S == String)
   @_specialize(where S == Substring)
   @_specialize(where S == Array<Character>)
-  public init<S : Sequence>(_ elements: S)
+  public init<S: Sequence>(_ elements: S)
   where S.Element == Character {
     if let str = elements as? String {
       self = str[...]
@@ -729,7 +728,7 @@ extension Substring : RangeReplaceableCollection {
   }
 
   @inlinable // specialize
-  public mutating func append<S : Sequence>(contentsOf elements: S)
+  public mutating func append<S: Sequence>(contentsOf elements: S)
   where S.Element == Character {
     var string = String(self)
     self = Substring() // Keep unique storage if possible
@@ -754,33 +753,33 @@ extension Substring {
   }
 }
 
-extension Substring : TextOutputStream {
+extension Substring: TextOutputStream {
   public mutating func write(_ other: String) {
     append(contentsOf: other)
   }
 }
 
-extension Substring : TextOutputStreamable {
+extension Substring: TextOutputStreamable {
   @inlinable // specializable
-  public func write<Target : TextOutputStream>(to target: inout Target) {
+  public func write<Target: TextOutputStream>(to target: inout Target) {
     target.write(String(self))
   }
 }
 
-extension Substring : ExpressibleByUnicodeScalarLiteral {
+extension Substring: ExpressibleByUnicodeScalarLiteral {
   @inlinable
   public init(unicodeScalarLiteral value: String) {
      self.init(value)
   }
 }
-extension Substring : ExpressibleByExtendedGraphemeClusterLiteral {
+extension Substring: ExpressibleByExtendedGraphemeClusterLiteral {
   @inlinable
   public init(extendedGraphemeClusterLiteral value: String) {
      self.init(value)
   }
 }
 
-extension Substring : ExpressibleByStringLiteral {
+extension Substring: ExpressibleByStringLiteral {
   @inlinable
   public init(stringLiteral value: String) {
      self.init(value)

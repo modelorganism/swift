@@ -494,7 +494,9 @@ public:
              EpilogueARCFunctionInfo *EAFI, bool disableArrayLoads);
 
   RLEContext(const RLEContext &) = delete;
-  RLEContext(RLEContext &&) = default;
+  RLEContext(RLEContext &&) = delete;
+  RLEContext &operator=(const RLEContext &) = delete;
+  RLEContext &operator=(RLEContext &&) = delete;
   ~RLEContext() = default;
 
   /// Entry point to redundant load elimination.
@@ -1639,6 +1641,10 @@ public:
   /// The entry point to the transformation.
   void run() override {
     SILFunction *F = getFunction();
+    // FIXME: Handle ownership.
+    if (F->hasOwnership())
+      return;
+
     LLVM_DEBUG(llvm::dbgs() << "*** RLE on function: " << F->getName()
                             << " ***\n");
 

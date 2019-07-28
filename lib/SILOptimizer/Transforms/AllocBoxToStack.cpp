@@ -42,7 +42,7 @@ static SILValue stripOffCopyValue(SILValue V) {
   return V;
 }
 
-/// \brief Returns True if the operand or one of its users is captured.
+/// Returns True if the operand or one of its users is captured.
 static bool useCaptured(Operand *UI) {
   auto *User = UI->getUser();
 
@@ -206,7 +206,7 @@ static bool partialApplyEscapes(SILValue V, bool examineApply);
 /// Could this operand to an apply escape that function by being
 /// stored or returned?
 static bool applyArgumentEscapes(FullApplySite Apply, Operand *O) {
-  SILFunction *F = Apply.getReferencedFunction();
+  SILFunction *F = Apply.getReferencedFunctionOrNull();
   // If we cannot examine the function body, assume the worst.
   if (!F || F->empty())
     return true;
@@ -283,7 +283,7 @@ static SILInstruction *findUnexpectedBoxUse(SILValue Box,
 /// disqualify it from being promoted to a stack location.  Return
 /// true if this partial apply will not block our promoting the box.
 static bool checkPartialApplyBody(Operand *O) {
-  SILFunction *F = ApplySite(O->getUser()).getReferencedFunction();
+  SILFunction *F = ApplySite(O->getUser()).getReferencedFunctionOrNull();
   // If we cannot examine the function body, assume the worst.
   if (!F || F->empty())
     return false;
@@ -452,8 +452,8 @@ static bool rewriteAllocBoxAsAllocStack(AllocBoxInst *ABI) {
 
   assert(ABI->getBoxType()->getLayout()->getFields().size() == 1
          && "promoting multi-field box not implemented");
-  auto &Lowering = ABI->getModule()
-    .getTypeLowering(ABI->getBoxType()->getFieldType(ABI->getModule(), 0));
+  auto &Lowering = ABI->getFunction()
+    ->getTypeLowering(ABI->getBoxType()->getFieldType(ABI->getModule(), 0));
   auto Loc = CleanupLocation::get(ABI->getLoc());
 
   for (auto LastRelease : FinalReleases) {
@@ -497,7 +497,7 @@ static bool rewriteAllocBoxAsAllocStack(AllocBoxInst *ABI) {
 
 namespace {
 
-/// \brief A SILCloner subclass which clones a closure function while
+/// A SILCloner subclass which clones a closure function while
 /// promoting some of its box parameters to stack addresses.
 class PromotedParamCloner : public SILClonerWithScopes<PromotedParamCloner> {
   friend class SILInstructionVisitor<PromotedParamCloner>;
@@ -558,7 +558,7 @@ static std::string getClonedName(SILFunction *F, IsSerialized_t Serialized,
   return Mangler.mangle();
 }
 
-/// \brief Create the function corresponding to the clone of the
+/// Create the function corresponding to the clone of the
 /// original closure with the signature modified to reflect promoted
 /// parameters (which are specified by PromotedArgIndices).
 SILFunction *PromotedParamCloner::
@@ -615,13 +615,13 @@ initCloned(SILOptFunctionBuilder &FuncBuilder, SILFunction *Orig,
   for (auto &Attr : Orig->getSemanticsAttrs()) {
     Fn->addSemanticsAttr(Attr);
   }
-  if (!Orig->hasQualifiedOwnership()) {
-    Fn->setUnqualifiedOwnership();
+  if (!Orig->hasOwnership()) {
+    Fn->setOwnershipEliminated();
   }
   return Fn;
 }
 
-/// \brief Populate the body of the cloned closure, modifying instructions as
+/// Populate the body of the cloned closure, modifying instructions as
 /// necessary to take into consideration the removed parameters.
 void
 PromotedParamCloner::populateCloned() {
@@ -669,7 +669,7 @@ PromotedParamCloner::populateCloned() {
   cloneFunctionBody(Orig, ClonedEntryBB, entryArgs);
 }
 
-/// \brief Handle a strong_release instruction during cloning of a closure; if
+/// Handle a strong_release instruction during cloning of a closure; if
 /// it is a strong release of a promoted box argument, then it is replaced with
 /// a ReleaseValue of the new object type argument, otherwise it is handled
 /// normally.
@@ -682,7 +682,7 @@ PromotedParamCloner::visitStrongReleaseInst(StrongReleaseInst *Inst) {
   SILCloner<PromotedParamCloner>::visitStrongReleaseInst(Inst);
 }
 
-/// \brief Handle a strong_release instruction during cloning of a closure; if
+/// Handle a strong_release instruction during cloning of a closure; if
 /// it is a strong release of a promoted box argument, then it is replaced with
 /// a ReleaseValue of the new object type argument, otherwise it is handled
 /// normally.
@@ -743,7 +743,7 @@ specializePartialApply(SILOptFunctionBuilder &FuncBuilder,
                        AllocBoxToStackState &pass) {
   auto *FRI = cast<FunctionRefInst>(PartialApply->getCallee());
   assert(FRI && "Expected a direct partial_apply!");
-  auto *F = FRI->getReferencedFunction();
+  auto *F = FRI->getReferencedFunctionOrNull();
   assert(F && "Expected a referenced function!");
 
   IsSerialized_t Serialized = IsNotSerialized;

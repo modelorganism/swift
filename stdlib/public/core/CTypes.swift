@@ -87,6 +87,12 @@ public typealias CLongDouble = Float80
 // Long Double type equivalent to Double type.
 public typealias CLongDouble = Double
 #endif
+#elseif os(Android)
+// On Android, long double is Float128 for AAPCS64, which we don't have yet in
+// Swift (SR-9072); and Double for ARMv7.
+#if arch(arm)
+public typealias CLongDouble = Double
+#endif
 #endif
 
 // FIXME: Is it actually UTF-32 on Darwin?
@@ -109,7 +115,7 @@ public typealias CBool = Bool
 ///
 /// Opaque pointers are used to represent C pointers to types that
 /// cannot be represented in Swift, such as incomplete struct types.
-@_fixed_layout
+@frozen
 public struct OpaquePointer {
   @usableFromInline
   internal var _rawValue: Builtin.RawPointer
@@ -183,7 +189,7 @@ extension OpaquePointer: Hashable {
   }
 }
 
-extension OpaquePointer : CustomDebugStringConvertible {
+extension OpaquePointer: CustomDebugStringConvertible {
   /// A textual representation of the pointer, suitable for debugging.
   public var debugDescription: String {
     return _rawPointerToString(_rawValue)
@@ -219,7 +225,40 @@ extension UInt {
 }
 
 /// A wrapper around a C `va_list` pointer.
-@_fixed_layout
+#if arch(arm64) && !(os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Windows))
+@frozen
+public struct CVaListPointer {
+  @usableFromInline // unsafe-performance
+  internal var _value: (__stack: UnsafeMutablePointer<Int>?,
+                        __gr_top: UnsafeMutablePointer<Int>?,
+                        __vr_top: UnsafeMutablePointer<Int>?,
+                        __gr_off: Int32,
+                        __vr_off: Int32)
+
+  @inlinable // unsafe-performance
+  public // @testable
+  init(__stack: UnsafeMutablePointer<Int>?,
+       __gr_top: UnsafeMutablePointer<Int>?,
+       __vr_top: UnsafeMutablePointer<Int>?,
+       __gr_off: Int32,
+       __vr_off: Int32) {
+    _value = (__stack, __gr_top, __vr_top, __gr_off, __vr_off)
+  }
+}
+
+extension CVaListPointer: CustomDebugStringConvertible {
+  public var debugDescription: String {
+    return "(\(_value.__stack.debugDescription), " +
+           "\(_value.__gr_top.debugDescription), " +
+           "\(_value.__vr_top.debugDescription), " +
+           "\(_value.__gr_off), " +
+           "\(_value.__vr_off))"
+  }
+}
+
+#else
+
+@frozen
 public struct CVaListPointer {
   @usableFromInline // unsafe-performance
   internal var _value: UnsafeMutableRawPointer
@@ -231,12 +270,14 @@ public struct CVaListPointer {
   }
 }
 
-extension CVaListPointer : CustomDebugStringConvertible {
+extension CVaListPointer: CustomDebugStringConvertible {
   /// A textual representation of the pointer, suitable for debugging.
   public var debugDescription: String {
     return _value.debugDescription
   }
 }
+
+#endif
 
 @inlinable
 internal func _memcpy(

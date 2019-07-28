@@ -35,25 +35,20 @@ extension String: BidirectionalCollection {
   /// The position of the first character in a nonempty string.
   ///
   /// In an empty string, `startIndex` is equal to `endIndex`.
-  @inlinable
-  public var startIndex: Index {
-    @inline(__always) get { return _guts.startIndex }
-  }
+  @inlinable @inline(__always)
+  public var startIndex: Index { return _guts.startIndex }
 
   /// A string's "past the end" position---that is, the position one greater
   /// than the last valid subscript argument.
   ///
   /// In an empty string, `endIndex` is equal to `startIndex`.
-  @inlinable
-  public var endIndex: Index {
-    @inline(__always) get { return _guts.endIndex }
-  }
+  @inlinable @inline(__always)
+  public var endIndex: Index { return _guts.endIndex }
 
   /// The number of characters in a string.
+  @inline(__always)
   public var count: Int {
-    @inline(__always) get {
-      return distance(from: startIndex, to: endIndex)
-    }
+    return distance(from: startIndex, to: endIndex)
   }
 
   /// Returns the position immediately after the given index.
@@ -65,13 +60,14 @@ extension String: BidirectionalCollection {
     _precondition(i < endIndex, "String index is out of bounds")
 
     // TODO: known-ASCII fast path, single-scalar-grapheme fast path, etc.
+    let i = _guts.scalarAlign(i)
     let stride = _characterStride(startingAt: i)
-    let nextOffset = i.encodedOffset &+ stride
+    let nextOffset = i._encodedOffset &+ stride
     let nextStride = _characterStride(
-      startingAt: Index(encodedOffset: nextOffset))
+      startingAt: Index(_encodedOffset: nextOffset)._scalarAligned)
 
     return Index(
-      encodedOffset: nextOffset, characterStride: nextStride)
+      encodedOffset: nextOffset, characterStride: nextStride)._scalarAligned
   }
 
   /// Returns the position immediately before the given index.
@@ -83,9 +79,11 @@ extension String: BidirectionalCollection {
     _precondition(i > startIndex, "String index is out of bounds")
 
     // TODO: known-ASCII fast path, single-scalar-grapheme fast path, etc.
+    let i = _guts.scalarAlign(i)
     let stride = _characterStride(endingAt: i)
-    let priorOffset = i.encodedOffset &- stride
-    return Index(encodedOffset: priorOffset, characterStride: stride)
+    let priorOffset = i._encodedOffset &- stride
+    return Index(
+      encodedOffset: priorOffset, characterStride: stride)._scalarAligned
   }
   /// Returns an index that is the specified distance from the given index.
   ///
@@ -172,7 +170,7 @@ extension String: BidirectionalCollection {
   @inlinable @inline(__always)
   public func distance(from start: Index, to end: Index) -> IndexDistance {
     // TODO: known-ASCII and single-scalar-grapheme fast path, etc.
-    return _distance(from: start, to: end)
+    return _distance(from: _guts.scalarAlign(start), to: _guts.scalarAlign(end))
   }
 
   /// Accesses the character at the given position.
@@ -190,78 +188,73 @@ extension String: BidirectionalCollection {
   ///
   /// - Parameter i: A valid index of the string. `i` must be less than the
   ///   string's end index.
-  @inlinable
+  @inlinable @inline(__always)
   public subscript(i: Index) -> Character {
-    @inline(__always) get {
-      _boundsCheck(i)
+    _boundsCheck(i)
 
-      let i = _guts.scalarAlign(i)
-      let distance = _characterStride(startingAt: i)
+    let i = _guts.scalarAlign(i)
+    let distance = _characterStride(startingAt: i)
 
-      if _fastPath(_guts.isFastUTF8) {
-        let start = i.encodedOffset
-        let end = start + distance
-        return _guts.withFastUTF8(range: start..<end) { utf8 in
-          return Character(unchecked: String._uncheckedFromUTF8(utf8))
-        }
-      }
-
-      return _foreignSubscript(position: i, distance: distance)
-    }
+    return _guts.errorCorrectedCharacter(
+      startingAt: i._encodedOffset, endingAt: i._encodedOffset &+ distance)
   }
 
   @inlinable @inline(__always)
   internal func _characterStride(startingAt i: Index) -> Int {
+    _internalInvariant_5_1(i._isScalarAligned)
+
     // Fast check if it's already been measured, otherwise check resiliently
     if let d = i.characterStride { return d }
 
     if i == endIndex { return 0 }
 
-    return _guts._opaqueCharacterStride(startingAt: i.encodedOffset)
+    return _guts._opaqueCharacterStride(startingAt: i._encodedOffset)
   }
 
   @inlinable @inline(__always)
   internal func _characterStride(endingAt i: Index) -> Int {
+    _internalInvariant_5_1(i._isScalarAligned)
+
     if i == startIndex { return 0 }
 
-    return _guts._opaqueCharacterStride(endingAt: i.encodedOffset)
+    return _guts._opaqueCharacterStride(endingAt: i._encodedOffset)
   }
 }
 
-// Foreign string support
 extension String {
-  @usableFromInline @inline(never)
-  @_effects(releasenone)
-  internal func _foreignSubscript(position: Index, distance: Int) -> Character {
-#if _runtime(_ObjC)
-    _sanityCheck(_guts.isForeign)
+  @frozen
+  public struct Iterator: IteratorProtocol {
+    @usableFromInline
+    internal var _guts: _StringGuts
 
-    // Both a fast-path for single-code-unit graphemes and validation:
-    //   ICU treats isolated surrogates as isolated graphemes
-    if distance == 1 {
-      return Character(
-        String(_guts.foreignErrorCorrectedScalar(startingAt: position).0))
+    @usableFromInline
+    internal var _position: Int = 0
+
+    @usableFromInline
+    internal var _end: Int
+
+    @inlinable
+    internal init(_ guts: _StringGuts) {
+      self._end = guts.count
+      self._guts = guts
     }
 
-    let start = position.encodedOffset
-    let end = start + distance
-    let count = end - start
+    @inlinable
+    public mutating func next() -> Character? {
+      guard _fastPath(_position < _end) else { return nil }
 
-    // TODO(String performance): Stack buffer if small enough
+      let len = _guts._opaqueCharacterStride(startingAt: _position)
+      let nextPosition = _position &+ len
+      let result = _guts.errorCorrectedCharacter(
+        startingAt: _position, endingAt: nextPosition)
+      _position = nextPosition
+      return result
+    }
+  }
 
-    var cus = Array<UInt16>(repeating: 0, count: count)
-    cus.withUnsafeMutableBufferPointer {
-      _cocoaStringCopyCharacters(
-        from: _guts._object.cocoaObject,
-        range: start..<end,
-        into: $0.baseAddress._unsafelyUnwrappedUnchecked)
-    }
-    return cus.withUnsafeBufferPointer {
-      return Character(String._uncheckedFromUTF16($0))
-    }
-#else
-    fatalError("No foreign strings on Linux in this version of Swift")
-#endif
+  @inlinable
+  public __consuming func makeIterator() -> Iterator {
+    return Iterator(_guts)
   }
 }
 

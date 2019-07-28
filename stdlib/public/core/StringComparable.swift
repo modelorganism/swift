@@ -64,15 +64,16 @@ extension StringProtocol {
   }
 }
 
-extension String : Equatable {
+extension String: Equatable {
   @inlinable @inline(__always) // For the bitwise comparision
   @_effects(readonly)
+  @_semantics("string.equals")
   public static func == (lhs: String, rhs: String) -> Bool {
     return _stringCompare(lhs._guts, rhs._guts, expecting: .equal)
   }
 }
 
-extension String : Comparable {
+extension String: Comparable {
   @inlinable @inline(__always) // For the bitwise comparision
   @_effects(readonly)
   public static func < (lhs: String, rhs: String) -> Bool {
@@ -80,4 +81,4 @@ extension String : Comparable {
   }
 }
 
-extension Substring : Equatable {}
+extension Substring: Equatable {}

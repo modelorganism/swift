@@ -1,9 +1,7 @@
 // RUN: %target-swift-emit-silgen -sanitize=thread %s | %FileCheck %s
-// REQUIRES: tsan_runtime
 
-// FIXME: This should be covered by "tsan_runtime"; older versions of Apple OSs
-// don't support TSan.
-// UNSUPPORTED: remote_run
+// TSan is only supported on 64 bit.
+// REQUIRES: PTRSIZE=64
 
 func takesInout(_ p: inout Int) { }
 func takesInout(_ p: inout MyStruct) { }
@@ -20,7 +18,7 @@ class MyClass {
 var gStruct = MyStruct()
 var gClass = MyClass()
 
-// CHECK-LABEL: sil hidden @$s20tsan_instrumentation17inoutGlobalStructyyF : $@convention(thin) () -> () {
+// CHECK-LABEL: sil hidden [ossa] @$s20tsan_instrumentation17inoutGlobalStructyyF : $@convention(thin) () -> () {
 // CHECK:  [[GLOBAL_ADDR:%.*]] = global_addr @$s20tsan_instrumentation7gStructAA02MyC0Vvp : $*MyStruct
 // CHECK:  [[WRITE:%.*]] = begin_access [modify] [dynamic] [[GLOBAL_ADDR]] : $*MyStruct
 // CHECK:  {{%.*}} = builtin "tsanInoutAccess"([[WRITE]] : $*MyStruct) : $()
@@ -31,7 +29,7 @@ func inoutGlobalStruct() {
 }
 
 
-// CHECK-LABEL: sil hidden @$s20tsan_instrumentation31inoutGlobalStructStoredPropertyyyF : $@convention(thin) () -> () {
+// CHECK-LABEL: sil hidden [ossa] @$s20tsan_instrumentation31inoutGlobalStructStoredPropertyyyF : $@convention(thin) () -> () {
 // CHECK:  [[GLOBAL_ADDR:%.*]] = global_addr @$s20tsan_instrumentation7gStructAA02MyC0Vvp : $*MyStruct
 // CHECK:  [[WRITE:%.*]] = begin_access [modify] [dynamic] [[GLOBAL_ADDR]] : $*MyStruct
 // CHECK:  {{%.*}} = builtin "tsanInoutAccess"([[WRITE]] : $*MyStruct) : $()
@@ -45,7 +43,7 @@ func inoutGlobalStructStoredProperty() {
   takesInout(&gStruct.storedProperty)
 }
 
-// CHECK-LABEL: sil hidden @$s20tsan_instrumentation30inoutGlobalClassStoredPropertyyyF : $@convention(thin) () -> () {
+// CHECK-LABEL: sil hidden [ossa] @$s20tsan_instrumentation30inoutGlobalClassStoredPropertyyyF : $@convention(thin) () -> () {
 // CHECK:  [[GLOBAL_ADDR:%.*]] = global_addr @$s20tsan_instrumentation6gClassAA02MyC0Cvp : $*MyClass
 // CHECK:  [[READ:%.*]] = begin_access [read] [dynamic] [[GLOBAL_ADDR]] : $*MyClass
 // CHECK:  [[LOADED_CLASS:%.*]] = load [copy] [[READ]] : $*MyClass

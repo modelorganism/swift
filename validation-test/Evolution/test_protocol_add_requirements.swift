@@ -1,6 +1,9 @@
 // RUN: %target-resilience-test
 // REQUIRES: executable_test
 
+// SR-10913
+// UNSUPPORTED: OS=windows-msvc
+
 import StdlibUnittest
 import protocol_add_requirements
 

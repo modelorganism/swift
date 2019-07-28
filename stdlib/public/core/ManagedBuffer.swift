@@ -44,8 +44,12 @@ open class ManagedBuffer<Header, Element> {
   /// reading the `header` property during `ManagedBuffer.create` is undefined.
   public final var header: Header
 
+  // This is really unfortunate. In Swift 5.0, the method descriptor for this
+  // initializer was public and subclasses would "inherit" it, referencing its
+  // method descriptor from their class override table.
+  @usableFromInline
   internal init(_doNotCallMe: ()) {
-    _sanityCheckFailure("Only initialize these by calling create")
+    _internalInvariantFailure("Only initialize these by calling create")
   }
 }
 
@@ -136,30 +140,6 @@ extension ManagedBuffer {
   }
 }
 
-@inline(never)
-public func tryReallocateUniquelyReferenced<Header, Element, Buffer: ManagedBuffer<Header, Element>>(
-  buffer: inout Buffer,
-  newMinimumCapacity: Int
-) -> Bool {
-  precondition(_isBitwiseTakable(Header.self))
-  precondition(_isBitwiseTakable(Element.self))
-  precondition(isKnownUniquelyReferenced(&buffer))
-
-  let newSizeInBytes = MemoryLayout<Header>.stride
-    + newMinimumCapacity * MemoryLayout<Element>.stride
-
-  return withUnsafeMutablePointer(to: &buffer) {
-    $0.withMemoryRebound(to: UnsafeMutableRawPointer.self, capacity: 1) {
-      if let reallocdObject = _reallocObject($0.pointee, newSizeInBytes) {
-        $0.pointee = reallocdObject
-        return true
-      } else {
-        return false
-      }
-    }
-  }
-}
-
 /// Contains a buffer object, and provides access to an instance of
 /// `Header` and contiguous storage for an arbitrary number of
 /// `Element` instances stored in that buffer.
@@ -195,7 +175,7 @@ public func tryReallocateUniquelyReferenced<Header, Element, Buffer: ManagedBuff
 ///        }
 ///      }
 ///
-@_fixed_layout
+@frozen
 public struct ManagedBufferPointer<Header, Element> {
 
   @usableFromInline
@@ -263,7 +243,7 @@ public struct ManagedBufferPointer<Header, Element> {
   /// it in this specialized constructor.
   @inlinable
   internal init(_uncheckedUnsafeBufferObject buffer: AnyObject) {
-    ManagedBufferPointer._sanityCheckValidBufferClass(type(of: buffer))
+    ManagedBufferPointer._internalInvariantValidBufferClass(type(of: buffer))
     self._nativeBuffer = Builtin.unsafeCastToNativeObject(buffer)
   }
 
@@ -299,8 +279,8 @@ public struct ManagedBufferPointer<Header, Element> {
     _uncheckedBufferClass: AnyClass,
     minimumCapacity: Int
   ) {
-    ManagedBufferPointer._sanityCheckValidBufferClass(_uncheckedBufferClass, creating: true)
-    _sanityCheck(
+    ManagedBufferPointer._internalInvariantValidBufferClass(_uncheckedBufferClass, creating: true)
+    _internalInvariant(
       minimumCapacity >= 0,
       "ManagedBufferPointer must have non-negative capacity")
 
@@ -421,10 +401,10 @@ extension ManagedBufferPointer {
   }
 
   @inlinable
-  internal static func _sanityCheckValidBufferClass(
+  internal static func _internalInvariantValidBufferClass(
     _ bufferClass: AnyClass, creating: Bool = false
   ) {
-    _sanityCheck(
+    _internalInvariant(
       _class_getInstancePositiveExtentSize(bufferClass) == MemoryLayout<_HeapObject>.size
       || (
         (!creating || bufferClass is ManagedBuffer<Header, Element>.Type)
@@ -432,7 +412,7 @@ extension ManagedBufferPointer {
           == _headerOffset + MemoryLayout<Header>.size),
       "ManagedBufferPointer buffer class has illegal stored properties"
     )
-    _sanityCheck(
+    _internalInvariant(
       _usesNativeSwiftReferenceCounting(bufferClass),
       "ManagedBufferPointer buffer class must be non-@objc"
     )
@@ -571,7 +551,7 @@ extension ManagedBufferPointer: Equatable {
 /// - Returns: `true` if `object` is known to have a single strong reference;
 ///   otherwise, `false`.
 @inlinable
-public func isKnownUniquelyReferenced<T : AnyObject>(_ object: inout T) -> Bool
+public func isKnownUniquelyReferenced<T: AnyObject>(_ object: inout T) -> Bool
 {
   return _isUnique(&object)
 }
@@ -607,7 +587,7 @@ public func isKnownUniquelyReferenced<T : AnyObject>(_ object: inout T) -> Bool
 /// - Returns: `true` if `object` is known to have a single strong reference;
 ///   otherwise, `false`. If `object` is `nil`, the return value is `false`.
 @inlinable
-public func isKnownUniquelyReferenced<T : AnyObject>(
+public func isKnownUniquelyReferenced<T: AnyObject>(
   _ object: inout T?
 ) -> Bool {
   return _isUnique(&object)

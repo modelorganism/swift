@@ -158,7 +158,7 @@
 ///     print("Average: \(average)°F in \(validTemps.count) " +
 ///           "out of \(tempsFahrenheit.count) observations.")
 ///     // Prints "Average: 74.84°F in 5 out of 7 observations."
-public protocol FloatingPoint : SignedNumeric, Strideable, Hashable
+public protocol FloatingPoint: SignedNumeric, Strideable, Hashable
                                 where Magnitude == Self {
 
   /// A type that can represent any written exponent.
@@ -230,7 +230,6 @@ public protocol FloatingPoint : SignedNumeric, Strideable, Hashable
   ///     the initializer has the same magnitude as `magnitudeOf`.
   init(signOf: Self, magnitudeOf: Self)
   
-  
   /// Creates a new value, rounded to the closest possible representation.
   ///
   /// If two representable values are equally close, the result is the value
@@ -245,14 +244,14 @@ public protocol FloatingPoint : SignedNumeric, Strideable, Hashable
   /// with more trailing zeros in its significand bit pattern.
   ///
   /// - Parameter value: The integer to convert to a floating-point value.
-  init<Source : BinaryInteger>(_ value: Source)
+  init<Source: BinaryInteger>(_ value: Source)
 
   /// Creates a new value, if the given integer can be represented exactly.
   ///
   /// If the given integer cannot be represented exactly, the result is `nil`.
   ///
   /// - Parameter value: The integer to convert to a floating-point value.
-  init?<Source : BinaryInteger>(exactly value: Source)
+  init?<Source: BinaryInteger>(exactly value: Source)
 
   /// The radix, or base of exponentiation, for a floating-point type.
   ///
@@ -366,18 +365,25 @@ public protocol FloatingPoint : SignedNumeric, Strideable, Hashable
   /// - `greatestFiniteMagnitude.ulp` is a finite number, even though the next
   ///   greater representable value is `infinity`.
   ///
-  /// This quantity, or a related quantity, is sometimes called *epsilon* or
-  /// *machine epsilon.* Avoid that name because it has different meanings in
-  /// different languages, which can lead to confusion, and because it
-  /// suggests that it is a good tolerance to use for comparisons, which it
-  /// almost never is.
+  /// See also the `ulpOfOne` static property.
   var ulp: Self { get }
 
   /// The unit in the last place of 1.0.
   ///
   /// The positive difference between 1.0 and the next greater representable
-  /// number. The `ulpOfOne` constant corresponds to the C macros
-  /// `FLT_EPSILON`, `DBL_EPSILON`, and others with a similar purpose.
+  /// number. `ulpOfOne` corresponds to the value represented by the C macros
+  /// `FLT_EPSILON`, `DBL_EPSILON`, etc, and is sometimes called *epsilon* or
+  /// *machine epsilon*. Swift deliberately avoids using the term "epsilon"
+  /// because:
+  ///
+  /// - Historically "epsilon" has been used to refer to several different
+  ///   concepts in different languages, leading to confusion and bugs.
+  ///
+  /// - The name "epsilon" suggests that this quantity is a good tolerance to
+  ///   choose for approximate comparisons, but it is almost always unsuitable
+  ///   for that purpose.
+  ///
+  /// See also the `ulp` member property.
   static var ulpOfOne: Self { get }
 
   /// The least positive normal number.
@@ -1204,7 +1210,7 @@ public protocol FloatingPoint : SignedNumeric, Strideable, Hashable
 }
 
 /// The sign of a floating-point value.
-@_frozen // FIXME(sil-serialize-all)
+@frozen
 public enum FloatingPointSign: Int {
   /// The sign for a positive value.
   case plus
@@ -1237,10 +1243,23 @@ public enum FloatingPointSign: Int {
   public static func ==(a: FloatingPointSign, b: FloatingPointSign) -> Bool {
     return a.rawValue == b.rawValue
   }
+
+  @inlinable
+  public var hashValue: Int { return rawValue.hashValue }
+
+  @inlinable
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(rawValue)
+  }
+
+  @inlinable
+  public func _rawHashValue(seed: Int) -> Int {
+    return rawValue._rawHashValue(seed: seed)
+  }
 }
 
 /// The IEEE 754 floating-point classes.
-@_frozen // FIXME(sil-serialize-all)
+@frozen
 public enum FloatingPointClassification {
   /// A signaling NaN ("not a number").
   ///
@@ -1478,7 +1497,7 @@ public protocol BinaryFloatingPoint: FloatingPoint, ExpressibleByFloatLiteral {
   /// - Parameter value: A floating-point value to be converted.
   init(_ value: Double)
 
-#if !os(Windows) && (arch(i386) || arch(x86_64))
+#if !(os(Windows) || os(Android)) && (arch(i386) || arch(x86_64))
   /// Creates a new instance from the given value, rounded to the closest
   /// possible representation.
   ///
@@ -1493,7 +1512,7 @@ public protocol BinaryFloatingPoint: FloatingPoint, ExpressibleByFloatLiteral {
   /// with more trailing zeros in its significand bit pattern.
   ///
   /// - Parameter value: A floating-point value to be converted.
-  init<Source : BinaryFloatingPoint>(_ value: Source)
+  init<Source: BinaryFloatingPoint>(_ value: Source)
 
   /// Creates a new instance from the given value, if it can be represented
   /// exactly.
@@ -1503,7 +1522,7 @@ public protocol BinaryFloatingPoint: FloatingPoint, ExpressibleByFloatLiteral {
   /// represented exactly if its payload cannot be encoded exactly.
   ///
   /// - Parameter value: A floating-point value to be converted.
-  init?<Source : BinaryFloatingPoint>(exactly value: Source)
+  init?<Source: BinaryFloatingPoint>(exactly value: Source)
 
   /// The number of bits used to represent the type's exponent.
   ///
@@ -1722,6 +1741,7 @@ extension FloatingPoint {
   /// - If `x` is `leastNonzeroMagnitude`, then `x.nextDown` is `0.0`.
   /// - If `x` is zero, then `x.nextDown` is `-leastNonzeroMagnitude`.
   /// - If `x` is `-greatestFiniteMagnitude`, then `x.nextDown` is `-infinity`.
+  @inlinable // FIXME(inline-always)
   public var nextDown: Self {
     @inline(__always)
     get {
@@ -1760,6 +1780,7 @@ extension FloatingPoint {
   /// - Parameter other: The value to use when dividing this value.
   /// - Returns: The remainder of this value divided by `other` using
   ///   truncating division.
+  @inlinable // FIXME(inline-always)
   @inline(__always)
   public func truncatingRemainder(dividingBy other: Self) -> Self {
     var lhs = self
@@ -1799,6 +1820,7 @@ extension FloatingPoint {
   ///
   /// - Parameter other: The value to use when dividing this value.
   /// - Returns: The remainder of this value divided by `other`.
+  @inlinable // FIXME(inline-always)
   @inline(__always)
   public func remainder(dividingBy other: Self) -> Self {
     var lhs = self
@@ -1876,10 +1898,6 @@ extension FloatingPoint {
   ///   other is NaN.
   @inlinable
   public static func minimum(_ x: Self, _ y: Self) -> Self {
-    if x.isSignalingNaN || y.isSignalingNaN {
-      //  Produce a quiet NaN matching platform arithmetic behavior.
-      return x + y
-    }
     if x <= y || y.isNaN { return x }
     return y
   }
@@ -1913,10 +1931,6 @@ extension FloatingPoint {
   ///   other is NaN.
   @inlinable
   public static func maximum(_ x: Self, _ y: Self) -> Self {
-    if x.isSignalingNaN || y.isSignalingNaN {
-      //  Produce a quiet NaN matching platform arithmetic behavior.
-      return x + y
-    }
     if x > y || y.isNaN { return x }
     return y
   }
@@ -1952,10 +1966,6 @@ extension FloatingPoint {
   ///   a number if the other is NaN.
   @inlinable
   public static func minimumMagnitude(_ x: Self, _ y: Self) -> Self {
-    if x.isSignalingNaN || y.isSignalingNaN {
-      //  Produce a quiet NaN matching platform arithmetic behavior.
-      return x + y
-    }
     if x.magnitude <= y.magnitude || y.isNaN { return x }
     return y
   }
@@ -1991,10 +2001,6 @@ extension FloatingPoint {
   ///   a number if the other is NaN.
   @inlinable
   public static func maximumMagnitude(_ x: Self, _ y: Self) -> Self {
-    if x.isSignalingNaN || y.isSignalingNaN {
-      //  Produce a quiet NaN matching platform arithmetic behavior.
-      return x + y
-    }
     if x.magnitude > y.magnitude || y.isNaN { return x }
     return y
   }
@@ -2025,6 +2031,7 @@ extension BinaryFloatingPoint {
   /// following formula, where `**` is exponentiation:
   ///
   ///     let magnitude = x.significand * F.radix ** x.exponent
+  @inlinable @inline(__always)
   public static var radix: Int { return 2 }
 
   /// Creates a new floating-point value using the sign of one value and the
@@ -2055,7 +2062,7 @@ extension BinaryFloatingPoint {
 
   @inlinable
   public // @testable
-  static func _convert<Source : BinaryFloatingPoint>(
+  static func _convert<Source: BinaryFloatingPoint>(
     from source: Source
   ) -> (value: Self, exact: Bool) {
     guard _fastPath(!source.isZero) else {
@@ -2196,7 +2203,7 @@ extension BinaryFloatingPoint {
   ///
   /// - Parameter value: A floating-point value to be converted.
   @inlinable
-  public init<Source : BinaryFloatingPoint>(_ value: Source) {
+  public init<Source: BinaryFloatingPoint>(_ value: Source) {
     self = Self._convert(from: value).value
   }
 
@@ -2208,7 +2215,7 @@ extension BinaryFloatingPoint {
   ///
   /// - Parameter value: A floating-point value to be converted.
   @inlinable
-  public init?<Source : BinaryFloatingPoint>(exactly value: Source) {
+  public init?<Source: BinaryFloatingPoint>(exactly value: Source) {
     let (value_, exact) = Self._convert(from: value)
     guard exact else { return nil }
     self = value_
@@ -2261,11 +2268,11 @@ extension BinaryFloatingPoint {
   }
 }
 
-extension BinaryFloatingPoint where Self.RawSignificand : FixedWidthInteger {
+extension BinaryFloatingPoint where Self.RawSignificand: FixedWidthInteger {
   
   @inlinable
   public // @testable
-  static func _convert<Source : BinaryInteger>(
+  static func _convert<Source: BinaryInteger>(
     from source: Source
   ) -> (value: Self, exact: Bool) {
     //  Useful constants:
@@ -2328,7 +2335,7 @@ extension BinaryFloatingPoint where Self.RawSignificand : FixedWidthInteger {
   ///
   /// - Parameter value: The integer to convert to a floating-point value.
   @inlinable
-  public init<Source : BinaryInteger>(_ value: Source) {
+  public init<Source: BinaryInteger>(_ value: Source) {
     self = Self._convert(from: value).value
   }
   
@@ -2338,7 +2345,7 @@ extension BinaryFloatingPoint where Self.RawSignificand : FixedWidthInteger {
   ///
   /// - Parameter value: The integer to convert to a floating-point value.
   @inlinable
-  public init?<Source : BinaryInteger>(exactly value: Source) {
+  public init?<Source: BinaryInteger>(exactly value: Source) {
     let (value_, exact) = Self._convert(from: value)
     guard exact else { return nil }
     self = value_

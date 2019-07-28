@@ -151,9 +151,10 @@ SILFunction::~SILFunction() {
          "Function cannot be deleted while function_ref's still exist");
 }
 
-void SILFunction::createProfiler(ASTNode Root, ForDefinition_t forDefinition) {
+void SILFunction::createProfiler(ASTNode Root, SILDeclRef forDecl,
+                                 ForDefinition_t forDefinition) {
   assert(!Profiler && "Function already has a profiler");
-  Profiler = SILProfiler::create(Module, forDefinition, Root);
+  Profiler = SILProfiler::create(Module, forDefinition, Root, forDecl);
 }
 
 bool SILFunction::hasForeignBody() const {
@@ -224,6 +225,38 @@ SILType GenericEnvironment::mapTypeIntoContext(SILModule &M,
 bool SILFunction::isNoReturnFunction() const {
   return SILType::getPrimitiveObjectType(getLoweredFunctionType())
       .isNoReturnFunction();
+}
+
+const TypeLowering &
+SILFunction::getTypeLowering(AbstractionPattern orig, Type subst) {
+  return getModule().Types.getTypeLowering(orig, subst,
+                                           getResilienceExpansion());
+}
+
+const TypeLowering &SILFunction::getTypeLowering(Type t) const {
+  return getModule().Types.getTypeLowering(t, getResilienceExpansion());
+}
+
+SILType
+SILFunction::getLoweredType(AbstractionPattern orig, Type subst) const {
+  return getModule().Types.getLoweredType(orig, subst,
+                                          getResilienceExpansion());
+}
+
+SILType SILFunction::getLoweredType(Type t) const {
+  return getModule().Types.getLoweredType(t, getResilienceExpansion());
+}
+
+SILType SILFunction::getLoweredLoadableType(Type t) const {
+  return getModule().Types.getLoweredLoadableType(t, getResilienceExpansion());
+}
+
+const TypeLowering &SILFunction::getTypeLowering(SILType type) const {
+  return getModule().Types.getTypeLowering(type, getResilienceExpansion());
+}
+
+bool SILFunction::isTypeABIAccessible(SILType type) const {
+  return getModule().isTypeABIAccessible(type, getResilienceExpansion());
 }
 
 SILBasicBlock *SILFunction::createBasicBlock() {
@@ -477,10 +510,16 @@ bool SILFunction::hasValidLinkageForFragileRef() const {
   if (hasValidLinkageForFragileInline())
     return true;
 
-  // If the containing module has been serialized
-  if (getModule().isSerialized()) {
+  // If the containing module has been serialized already, we no longer
+  // enforce any invariants.
+  if (getModule().isSerialized())
     return true;
-  }
+
+  // If the function has a subclass scope that limits its visibility outside
+  // the module despite its linkage, we cannot reference it.
+  if (getClassSubclassScope() == SubclassScope::Resilient &&
+      isAvailableExternally())
+    return false;
 
   // Otherwise, only public functions can be referenced.
   return hasPublicVisibility(getLinkage());

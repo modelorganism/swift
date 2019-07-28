@@ -204,7 +204,7 @@ void irgen::emitBuiltinCall(IRGenFunction &IGF, const BuiltinInfo &Builtin,
 
   // Emit non-mergeable traps only.
   if (IGF.Builder.isTrapIntrinsic(IID)) {
-    IGF.Builder.CreateNonMergeableTrap(IGF.IGM);
+    IGF.Builder.CreateNonMergeableTrap(IGF.IGM, StringRef());
     return;
   }
 
@@ -353,6 +353,19 @@ if (Builtin.ID == BuiltinValueKind::id) { \
   
 #define BUILTIN(ID, Name, Attrs)  // Ignore the rest.
 #include "swift/AST/Builtins.def"
+
+  if (Builtin.ID == BuiltinValueKind::GlobalStringTablePointer) {
+    // This builtin should be used only on strings constructed from a
+    // string literal. If we ever get to the point of executing this builtin
+    // at run time, it implies an incorrect use of the builtin and must result
+    // in a trap.
+    IGF.emitTrap("invalid use of globalStringTablePointer",
+                 /*Unreachable=*/false);
+    auto returnValue = llvm::UndefValue::get(IGF.IGM.Int8PtrTy);
+    // Consume the arguments of the builtin.
+    (void)args.claimAll();
+    return out.add(returnValue);
+  }
 
   if (Builtin.ID == BuiltinValueKind::WillThrow) {
     // willThrow is emitted like a Swift function call with the error in
@@ -755,22 +768,6 @@ if (Builtin.ID == BuiltinValueKind::id) { \
                                   llvm::ConstantInt::get(IGF.IGM.Int1Ty, 1));
     // Return the tuple: (the result, the overflow flag).
     out.add(Res);
-    return out.add(OverflowFlag);
-  }
-
-  if (Builtin.ID == BuiltinValueKind::SUCheckedConversion ||
-      Builtin.ID == BuiltinValueKind::USCheckedConversion) {
-    auto Ty =
-      IGF.IGM.getStorageTypeForLowered(Builtin.Types[0]->getCanonicalType());
-
-    // Report a sign error if the input parameter is a negative number, when
-    // interpreted as signed.
-    llvm::Value *Arg = args.claimNext();
-    llvm::Value *Zero = llvm::ConstantInt::get(Ty, 0);
-    llvm::Value *OverflowFlag = IGF.Builder.CreateICmpSLT(Arg, Zero);
-
-    // Return the tuple: (the result (same as input), the overflow flag).
-    out.add(Arg);
     return out.add(OverflowFlag);
   }
 

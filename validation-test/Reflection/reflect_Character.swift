@@ -34,12 +34,10 @@ reflect(object: obj)
 // CHECK-64-NEXT:           (struct size=16 alignment=8 stride=16 num_extra_inhabitants=2147483647 bitwise_takable=1
 // CHECK-64-NEXT:             (field name=_object offset=0
 // CHECK-64-NEXT:               (struct size=16 alignment=8 stride=16 num_extra_inhabitants=2147483647 bitwise_takable=1
-// CHECK-64-NEXT:                 (field name=_countAndFlags offset=0
+// CHECK-64-NEXT:                 (field name=_countAndFlagsBits offset=0
 // CHECK-64-NEXT:                   (struct size=8 alignment=8 stride=8 num_extra_inhabitants=0 bitwise_takable=1
-// CHECK-64-NEXT:                     (field name=_storage offset=0
-// CHECK-64-NEXT:                       (struct size=8 alignment=8 stride=8 num_extra_inhabitants=0 bitwise_takable=1
-// CHECK-64-NEXT:                         (field name=_value offset=0
-// CHECK-64-NEXT:                           (builtin size=8 alignment=8 stride=8 num_extra_inhabitants=0 bitwise_takable=1))))))
+// CHECK-64-NEXT:                     (field name=_value offset=0
+// CHECK-64-NEXT:                       (builtin size=8 alignment=8 stride=8 num_extra_inhabitants=0 bitwise_takable=1))))
 // CHECK-64-NEXT:                 (field name=_object offset=8
 // CHECK-64-NEXT:                   (builtin size=8 alignment=8 stride=8 num_extra_inhabitants=2147483647 bitwise_takable=1)))))))))))
 
@@ -50,9 +48,9 @@ reflect(object: obj)
 // CHECK-32: Type info:
 // CHECK-32-NEXT: (class_instance size=20 alignment=4 stride=20 num_extra_inhabitants=0 bitwise_takable=1
 // CHECK-32-NEXT:   (field name=t offset=8
-// CHECK-32-NEXT:     (struct size=12 alignment=4 stride=12 num_extra_inhabitants=128 bitwise_takable=1
+// CHECK-32-NEXT:     (struct size=12 alignment=4 stride=12 num_extra_inhabitants=253 bitwise_takable=1
 // CHECK-32-NEXT:       (field name=_str offset=0
-// CHECK-32-NEXT:         (struct size=12 alignment=4 stride=12 num_extra_inhabitants=128 bitwise_takable=1
+// CHECK-32-NEXT:         (struct size=12 alignment=4 stride=12 num_extra_inhabitants=253 bitwise_takable=1
 
 doneReflecting()
 

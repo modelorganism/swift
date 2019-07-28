@@ -16,6 +16,7 @@
 #include "swift/AST/GenericSignature.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/ProtocolConformance.h"
+#include "swift/AST/ASTMangler.h"
 #include "swift/SIL/CFG.h"
 #include "swift/SIL/PrettyStackTrace.h"
 #include "swift/SIL/SILArgument.h"
@@ -195,6 +196,10 @@ namespace {
     /// Additional functions we might need to serialize.
     llvm::SmallVector<const SILFunction *, 16> Worklist;
 
+    /// String storage for temporarily created strings which are referenced from
+    /// the tables.
+    llvm::BumpPtrAllocator StringTable;
+
     std::array<unsigned, 256> SILAbbrCodes;
     template <typename Layout>
     void registerSILAbbr() {
@@ -336,9 +341,17 @@ void SILSerializer::processSILFunctionWorklist() {
 /// We enumerate all values in a SILFunction beforehand to correctly
 /// handle forward references of values.
 ValueID SILSerializer::addValueRef(const ValueBase *Val) {
-  if (!Val || isa<SILUndef>(Val))
+  if (!Val)
     return 0;
 
+  if (auto *Undef = dyn_cast<SILUndef>(Val)) {
+    // The first two IDs are reserved for SILUndef.
+    if (Undef->getOwnershipKind() == ValueOwnershipKind::Any)
+      return 0;
+
+    assert(Undef->getOwnershipKind() == ValueOwnershipKind::Owned);
+    return 1;
+  }
   ValueID id = ValueIDs[Val];
   assert(id != 0 && "We should have assigned a value ID to each value.");
   return id;
@@ -401,7 +414,7 @@ void SILSerializer::writeSILFunction(const SILFunction &F, bool DeclOnly) {
       (unsigned)F.isThunk(), (unsigned)F.isWithoutActuallyEscapingThunk(),
       (unsigned)F.isGlobalInit(), (unsigned)F.getInlineStrategy(),
       (unsigned)F.getOptimizationMode(), (unsigned)F.getEffectsKind(),
-      (unsigned)numSpecAttrs, (unsigned)F.hasQualifiedOwnership(),
+      (unsigned)numSpecAttrs, (unsigned)F.hasOwnership(),
       F.isWeakLinked(), (unsigned)F.isDynamicallyReplaceable(), FnID,
       replacedFunctionID, genericEnvID, clangNodeOwnerID, SemanticsIDs);
 
@@ -425,7 +438,9 @@ void SILSerializer::writeSILFunction(const SILFunction &F, bool DeclOnly) {
   // FIXME: Add reverse iteration to SILSuccessor and convert this to a "stable"
   // RPO order. Currently, the serializer inverts the order of successors each
   // time they are processed.
-  unsigned ValueID = 0;
+  //
+  // The first valid value ID is 2. 0 and 1 are reserved for SILUndef.
+  unsigned ValueID = 2;
   llvm::ReversePostOrderTraversal<SILFunction *> RPOT(
       const_cast<SILFunction *>(&F));
   for (auto Iter = RPOT.begin(), E = RPOT.end(); Iter != E; ++Iter) {
@@ -433,11 +448,11 @@ void SILSerializer::writeSILFunction(const SILFunction &F, bool DeclOnly) {
     BasicBlockMap.insert(std::make_pair(&BB, BasicID++));
 
     for (auto I = BB.args_begin(), E = BB.args_end(); I != E; ++I)
-      ValueIDs[static_cast<const ValueBase*>(*I)] = ++ValueID;
+      ValueIDs[static_cast<const ValueBase*>(*I)] = ValueID++;
 
     for (const SILInstruction &SI : BB)
       for (auto result : SI.getResults())
-        ValueIDs[result] = ++ValueID;
+        ValueIDs[result] = ValueID++;
   }
 
   // Write SIL basic blocks in the RPOT order
@@ -683,6 +698,10 @@ SILSerializer::writeKeyPathPatternComponent(
     break;
   case KeyPathPatternComponent::Kind::OptionalWrap:
     handleComponentCommon(KeyPathComponentKindEncoding::OptionalWrap);
+    break;
+  case KeyPathPatternComponent::Kind::TupleElement:
+    handleComponentCommon(KeyPathComponentKindEncoding::TupleElement);
+    ListOfValues.push_back((unsigned)component.getTupleIndex());
     break;
   }
 }
@@ -1211,7 +1230,6 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
   NEVER_LOADABLE_CHECKED_REF_STORAGE(Name, "...") \
   ALWAYS_LOADABLE_CHECKED_REF_STORAGE(Name, "...")
 #include "swift/AST/ReferenceStorage.def"
-  case SILInstructionKind::CondFailInst:
   case SILInstructionKind::RetainValueInst:
   case SILInstructionKind::DestructureStructInst:
   case SILInstructionKind::DestructureTupleInst:
@@ -1291,7 +1309,7 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
     // Use SILOneOperandLayout to specify the function type and the function
     // name (IdentifierID).
     const FunctionRefInst *FRI = cast<FunctionRefInst>(&SI);
-    SILFunction *ReferencedFunction = FRI->getReferencedFunction();
+    SILFunction *ReferencedFunction = FRI->getInitiallyReferencedFunction();
     unsigned abbrCode = SILAbbrCodes[SILOneOperandLayout::Code];
     SILOneOperandLayout::emitRecord(Out, ScratchRecord, abbrCode,
         (unsigned)SI.getKind(), 0,
@@ -1305,7 +1323,7 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
     // Use SILOneOperandLayout to specify the function type and the function
     // name (IdentifierID).
     const auto *FRI = cast<DynamicFunctionRefInst>(&SI);
-    SILFunction *ReferencedFunction = FRI->getReferencedFunction();
+    SILFunction *ReferencedFunction = FRI->getInitiallyReferencedFunction();
     unsigned abbrCode = SILAbbrCodes[SILOneOperandLayout::Code];
     SILOneOperandLayout::emitRecord(Out, ScratchRecord, abbrCode,
         (unsigned)SI.getKind(), 0,
@@ -1319,7 +1337,7 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
     // Use SILOneOperandLayout to specify the function type and the function
     // name (IdentifierID).
     const auto *FRI = cast<PreviousDynamicFunctionRefInst>(&SI);
-    SILFunction *ReferencedFunction = FRI->getReferencedFunction();
+    SILFunction *ReferencedFunction = FRI->getInitiallyReferencedFunction();
     unsigned abbrCode = SILAbbrCodes[SILOneOperandLayout::Code];
     SILOneOperandLayout::emitRecord(Out, ScratchRecord, abbrCode,
         (unsigned)SI.getKind(), 0,
@@ -1378,6 +1396,18 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
         S.addTypeRef(TAI->getIndex()->getType().getASTType()),
         addValueRef(TAI->getIndex()),
         S.addTypeRef(TAI->getTailType().getASTType()));
+    break;
+  }
+  case SILInstructionKind::CondFailInst: {
+    auto *CFI = cast<CondFailInst>(&SI);
+    SILValue operand = CFI->getOperand();
+    SILTwoOperandsLayout::emitRecord(Out, ScratchRecord,
+        SILAbbrCodes[SILTwoOperandsLayout::Code],
+        (unsigned)SI.getKind(), /*attributes*/ 0,
+        S.addTypeRef(operand->getType().getASTType()),
+        (unsigned)operand->getType().getCategory(),
+        addValueRef(operand),
+        0, 0, S.addUniquedStringRef(CFI->getMessage()));
     break;
   }
   case SILInstructionKind::StringLiteralInst: {
@@ -1489,8 +1519,6 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
     if (SI.getKind() == SILInstructionKind::ConvertEscapeToNoEscapeInst) {
       if (cast<ConvertEscapeToNoEscapeInst>(SI).isLifetimeGuaranteed())
         attrs |= 0x01;
-      if (cast<ConvertEscapeToNoEscapeInst>(SI).isEscapedByUser())
-        attrs |= 0x02;
     }
     if (SI.getKind() == SILInstructionKind::ConvertFunctionInst) {
       if (cast<ConvertFunctionInst>(SI).withoutActuallyEscaping())
@@ -1670,6 +1698,7 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
       value = cast<Store##Name##Inst>(&SI)->getSrc();
 #include "swift/AST/ReferenceStorage.def"
     } else if (SI.getKind() == SILInstructionKind::AssignInst) {
+      Attr = unsigned(cast<AssignInst>(&SI)->getOwnershipQualifier());
       operand = cast<AssignInst>(&SI)->getDest();
       value = cast<AssignInst>(&SI)->getSrc();
     } else if (SI.getKind() == SILInstructionKind::CopyAddrInst) {
@@ -1692,6 +1721,8 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
                   addValueRef(operand));
     break;
   }
+  case SILInstructionKind::AssignByWrapperInst:
+    llvm_unreachable("not supported");
   case SILInstructionKind::BindMemoryInst: {
     auto *BI = cast<BindMemoryInst>(&SI);
     SILValue baseOperand = BI->getBase();
@@ -2090,8 +2121,6 @@ void SILSerializer::writeSILInstruction(const SILInstruction &SI) {
 
     break;
   }
-  case SILInstructionKind::MarkUninitializedBehaviorInst:
-    llvm_unreachable("todo");
   }
   // Non-void values get registered in the value table.
   for (auto result : SI.getResults()) {
@@ -2195,7 +2224,17 @@ void SILSerializer::writeSILVTable(const SILVTable &vt) {
   if (!ShouldSerializeAll &&
       vt.getClass()->getEffectiveAccess() < swift::AccessLevel::Public)
     return;
-  VTableList[vt.getClass()->getName().str()] = NextVTableID++;
+
+  // Use the mangled name of the class as a key to distinguish between classes
+  // which have the same name (but are in different contexts).
+  Mangle::ASTMangler mangler;
+  std::string mangledClassName = mangler.mangleNominalType(vt.getClass());
+  size_t nameLength = mangledClassName.size();
+  char *stringStorage = (char *)StringTable.Allocate(nameLength, 1);
+  std::memcpy(stringStorage, mangledClassName.data(), nameLength);
+
+  VTableList[StringRef(stringStorage, nameLength)] = NextVTableID++;
+
   VTableOffset.push_back(Out.GetCurrentBitNo());
   VTableLayout::emitRecord(Out, ScratchRecord, SILAbbrCodes[VTableLayout::Code],
                            S.addDeclRef(vt.getClass()),
@@ -2217,7 +2256,6 @@ void SILSerializer::writeSILVTable(const SILVTable &vt) {
         // SILFunction name
         S.addUniquedStringRef(entry.Implementation->getName()),
         toStableVTableEntryKind(entry.TheKind),
-        toStableSILLinkage(entry.Linkage),
         ListOfValues);
   }
 }
@@ -2424,6 +2462,7 @@ void SILSerializer::writeSILBlock(const SILModule *SILMod) {
   // decl blocks and sil blocks.
   registerSILAbbr<decls_block::AbstractProtocolConformanceLayout>();
   registerSILAbbr<decls_block::NormalProtocolConformanceLayout>();
+  registerSILAbbr<decls_block::SelfProtocolConformanceLayout>();
   registerSILAbbr<decls_block::SpecializedProtocolConformanceLayout>();
   registerSILAbbr<decls_block::InheritedProtocolConformanceLayout>();
   registerSILAbbr<decls_block::NormalProtocolConformanceIdLayout>();

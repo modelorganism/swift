@@ -112,8 +112,8 @@ static SILValue emitIntValue(SILGenFunction &SGF, SILLocation loc,
                              SILType type, unsigned value) {
   if (auto structDecl = type.getStructOrBoundGenericStruct()) {
     auto properties = structDecl->getStoredProperties();
-    assert(std::next(properties.begin()) == properties.end());
-    SILType fieldType = type.getFieldType(*properties.begin(), SGF.SGM.M);
+    assert(properties.size() == 1);
+    SILType fieldType = type.getFieldType(properties[0], SGF.SGM.M);
     SILValue fieldValue = emitIntValue(SGF, loc, fieldType, value);
     return SGF.B.createStruct(loc, type, fieldValue);
   }
@@ -185,7 +185,7 @@ emitBridgeErrorForForeignError(SILLocation loc,
   case ForeignErrorConvention::NilResult:
     return B.createOptionalNone(loc, bridgedResultType);
   case ForeignErrorConvention::NonNilError:
-    return SILUndef::get(bridgedResultType, SGM.M);
+    return SILUndef::get(bridgedResultType, F);
   }
   llvm_unreachable("bad foreign error convention kind");
 }
@@ -281,25 +281,6 @@ void SILGenFunction::emitForeignErrorBlock(SILLocation loc,
   emitThrow(loc, error);
 }
 
-/// Unwrap a value of a wrapped integer type to get at the juicy
-/// Builtin.IntegerN value within.
-static SILValue emitUnwrapIntegerResult(SILGenFunction &SGF,
-                                        SILLocation loc,
-                                        SILValue value) {
-  // This is a loop because we want to handle types that wrap integer types,
-  // like ObjCBool (which may be Bool or Int8).
-  while (!value->getType().is<BuiltinIntegerType>()) {
-    auto structDecl = value->getType().getStructOrBoundGenericStruct();
-    assert(structDecl && "value for error result wasn't of struct type!");
-    assert(std::next(structDecl->getStoredProperties().begin())
-             == structDecl->getStoredProperties().end());
-    auto property = *structDecl->getStoredProperties().begin();
-    value = SGF.B.createStructExtract(loc, value, property);
-  }
-
-  return value;
-}
-
 /// Perform a foreign error check by testing whether the call result is zero.
 /// The call result is otherwise ignored.
 static void
@@ -312,7 +293,7 @@ emitResultIsZeroErrorCheck(SILGenFunction &SGF, SILLocation loc,
   }
 
   SILValue resultValue =
-    emitUnwrapIntegerResult(SGF, loc, result.getUnmanagedValue());
+    SGF.emitUnwrapIntegerResult(loc, result.getUnmanagedValue());
   auto resultType = resultValue->getType().getASTType();
 
   if (!resultType->isBuiltinIntegerType(1)) {

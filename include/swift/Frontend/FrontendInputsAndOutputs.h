@@ -173,7 +173,7 @@ public:
 
 private:
   friend class ArgsToFrontendOptionsConverter;
-  friend class ParseableInterfaceModuleLoader;
+  friend class ParseableInterfaceBuilder;
   void setMainAndSupplementaryOutputs(
       ArrayRef<std::string> outputFiles,
       ArrayRef<SupplementaryOutputPaths> supplementaryOutputs);
@@ -243,4 +243,4 @@ public:
 
 } // namespace swift
 
-#endif /* SWIFT_FRONTEND_FRONTENDINPUTS_H */
+#endif // SWIFT_FRONTEND_FRONTENDINPUTS_H

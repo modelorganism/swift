@@ -348,7 +348,7 @@ internal func unimplemented_utf8_32bit(
 /// [clusters]: http://www.unicode.org/glossary/#extended_grapheme_cluster
 /// [scalars]: http://www.unicode.org/glossary/#unicode_scalar_value
 /// [equivalence]: http://www.unicode.org/glossary/#canonical_equivalent
-@_fixed_layout
+@frozen
 public struct String {
   public // @SPI(Foundation)
   var _guts: _StringGuts
@@ -367,6 +367,7 @@ public struct String {
   ///     let empty = ""
   ///     let alsoEmpty = String()
   @inlinable @inline(__always)
+  @_semantics("string.init_empty")
   public init() { self.init(_StringGuts()) }
 }
 
@@ -400,22 +401,102 @@ extension String {
   public init<C: Collection, Encoding: Unicode.Encoding>(
     decoding codeUnits: C, as sourceEncoding: Encoding.Type
   ) where C.Iterator.Element == Encoding.CodeUnit {
+    guard _fastPath(sourceEncoding == UTF8.self) else {
+      self = String._fromCodeUnits(
+        codeUnits, encoding: sourceEncoding, repair: true)!.0
+      return
+    }
+
     if let contigBytes = codeUnits as? _HasContiguousBytes,
-       sourceEncoding == UTF8.self,
        contigBytes._providesContiguousBytesNoCopy
     {
       self = contigBytes.withUnsafeBytes { rawBufPtr in
-        let ptr = rawBufPtr.baseAddress._unsafelyUnwrappedUnchecked
         return String._fromUTF8Repairing(
           UnsafeBufferPointer(
-            start: ptr.assumingMemoryBound(to: UInt8.self),
+            start: rawBufPtr.baseAddress?.assumingMemoryBound(to: UInt8.self),
             count: rawBufPtr.count)).0
       }
       return
     }
 
-    self = String._fromCodeUnits(
-      codeUnits, encoding: sourceEncoding, repair: true)!.0
+    // Just copying to an Array is significantly faster than performing
+    // generic operations
+    self = Array(codeUnits).withUnsafeBufferPointer {
+      let raw = UnsafeRawBufferPointer($0)
+      return String._fromUTF8Repairing(raw.bindMemory(to: UInt8.self)).0
+    }
+    return
+  }
+  
+  /// Creates a new String with the specified capacity in UTF-8 code units then
+  /// calls the given closure with a buffer covering the String's uninitialized
+  /// memory.
+  ///
+  /// The closure should return the number of initialized code units,
+  /// or 0 if it couldn't initialize the buffer (for example if the
+  /// requested capacity was too small).
+  ///
+  /// This method replaces ill-formed UTF-8 sequences with the Unicode
+  /// replacement character (`"\u{FFFD}"`); This may require resizing
+  /// the buffer beyond its original capacity.
+  ///
+  /// The following examples use this initializer with the contents of two
+  /// different `UInt8` arrays---the first with well-formed UTF-8 code unit
+  /// sequences and the second with an ill-formed sequence at the end.
+  ///
+  ///     let validUTF8: [UInt8] = [67, 97, 102, -61, -87, 0]
+  ///     let s = String(uninitializedCapacity: validUTF8.count,
+  ///                    initializingUTF8With: { ptr in
+  ///         ptr.initializeFrom(validUTF8)
+  ///         return validUTF8.count
+  ///     })
+  ///     // Prints "Café"
+  ///
+  ///     let invalidUTF8: [UInt8] = [67, 97, 102, -61, 0]
+  ///     let s = String(uninitializedCapacity: invalidUTF8.count,
+  ///                    initializingUTF8With: { ptr in
+  ///         ptr.initializeFrom(invalidUTF8)
+  ///         return invalidUTF8.count
+  ///     })
+  ///     // Prints "Caf�"
+  ///
+  ///     let s = String(uninitializedCapacity: invalidUTF8.count,
+  ///                    initializingUTF8With: { ptr in
+  ///         ptr.initializeFrom(invalidUTF8)
+  ///         return 0
+  ///     })
+  ///     // Prints ""
+  ///
+  /// - Parameters:
+  ///   - capacity: The number of UTF-8 code units worth of memory to allocate
+  ///       for the String.
+  ///   - initializer: A closure that initializes elements and sets the count of
+  ///       the new String
+  ///     - Parameters:
+  ///       - buffer: A buffer covering uninitialized memory with room for the
+  ///           specified number of UTF-8 code units.
+  @inline(__always)
+  internal init(
+    uninitializedCapacity capacity: Int,
+    initializingUTF8With initializer: (
+      _ buffer: UnsafeMutableBufferPointer<UInt8>
+    ) throws -> Int
+  ) rethrows {
+    if _fastPath(capacity <= _SmallString.capacity) {
+      let smol = try _SmallString(initializingUTF8With: initializer)
+      // Fast case where we fit in a _SmallString and don't need UTF8 validation
+      if _fastPath(smol.isASCII) {
+        self = String(_StringGuts(smol))
+      } else {
+        //We succeeded in making a _SmallString, but may need to repair UTF8
+        self = smol.withUTF8 { String._fromUTF8Repairing($0).result }
+      }
+      return
+    }
+    
+    self = try String._fromLargeUTF8Repairing(
+      uninitializedCapacity: capacity,
+      initializingWith: initializer)
   }
 
   /// Calls the given closure with a pointer to the contents of the string,
@@ -443,7 +524,7 @@ extension String {
     if targetEncoding == UTF8.self {
       return try self.withCString {
         (cPtr: UnsafePointer<CChar>) -> Result  in
-        _sanityCheck(UInt8.self == TargetEncoding.CodeUnit.self)
+        _internalInvariant(UInt8.self == TargetEncoding.CodeUnit.self)
         let ptr = UnsafeRawPointer(cPtr).assumingMemoryBound(
           to: TargetEncoding.CodeUnit.self)
         return try body(ptr)
@@ -458,7 +539,8 @@ extension String {
     encodedAs targetEncoding: TargetEncoding.Type,
     _ body: (UnsafePointer<TargetEncoding.CodeUnit>) throws -> Result
   ) rethrows -> Result {
-    return try self._withUTF8 { utf8 in
+    var copy = self
+    return try copy.withUTF8 { utf8 in
       var arg = Array<TargetEncoding.CodeUnit>()
       arg.reserveCapacity(1 &+ self._guts.count / 4)
       let repaired = transcode(
@@ -468,7 +550,7 @@ extension String {
         stoppingOnError: false,
         into: { arg.append($0) })
       arg.append(TargetEncoding.CodeUnit(0))
-      _sanityCheck(!repaired)
+      _internalInvariant(!repaired)
       return try body(arg)
     }
   }
@@ -560,6 +642,7 @@ extension String {
 
   // String append
   @inlinable // Forward inlinability to append
+  @_semantics("string.plusequals")
   public static func += (lhs: inout String, rhs: String) {
     lhs.append(rhs)
   }
@@ -590,10 +673,10 @@ extension Sequence where Element: StringProtocol {
   internal func _joined(separator: String) -> String {
     // A likely-under-estimate, but lets us skip some of the growth curve
     // for large Sequences.
-    let understimatedCap =
+    let underestimatedCap =
       (1 &+ separator._guts.count) &* self.underestimatedCount
     var result = ""
-    result.reserveCapacity(understimatedCap)
+    result.reserveCapacity(underestimatedCap)
     if separator.isEmpty {
       for x in self {
         result.append(x._ephemeralString)
@@ -703,13 +786,12 @@ extension String {
   public func lowercased() -> String {
     if _fastPath(_guts.isFastASCII) {
       return _guts.withFastUTF8 { utf8 in
-        // TODO(String performance): We can directly call appendInPlace
-        var result = String()
-        result.reserveCapacity(utf8.count)
-        for u8 in utf8 {
-          result._guts.append(String(Unicode.Scalar(_lowercaseASCII(u8)))._guts)
+        return String(uninitializedCapacity: utf8.count) { buffer in
+          for i in 0 ..< utf8.count {
+            buffer[i] = _lowercaseASCII(utf8[i])
+          }
+          return utf8.count
         }
-        return result
       }
     }
 
@@ -764,13 +846,12 @@ extension String {
   public func uppercased() -> String {
     if _fastPath(_guts.isFastASCII) {
       return _guts.withFastUTF8 { utf8 in
-        // TODO(String performance): code-unit appendInPlace on guts
-        var result = String()
-        result.reserveCapacity(utf8.count)
-        for u8 in utf8 {
-          result._guts.append(String(Unicode.Scalar(_uppercaseASCII(u8)))._guts)
+        return String(uninitializedCapacity: utf8.count) { buffer in
+          for i in 0 ..< utf8.count {
+            buffer[i] = _uppercaseASCII(utf8[i])
+          }
+          return utf8.count
         }
-        return result
       }
     }
 
@@ -813,7 +894,7 @@ extension String {
   /// Creates an instance from the description of a given
   /// `LosslessStringConvertible` instance.
   @inlinable @inline(__always)
-  public init<T : LosslessStringConvertible>(_ value: T) {
+  public init<T: LosslessStringConvertible>(_ value: T) {
     self = value.description
   }
 }
@@ -830,15 +911,129 @@ extension String: CustomStringConvertible {
 extension String {
   public // @testable
   var _nfcCodeUnits: [UInt8] {
-    return _gutsSlice.withNFCCodeUnitsIterator_2 { Array($0) }
+    var codeUnits = [UInt8]()
+    _withNFCCodeUnits {
+      codeUnits.append($0)
+    }
+    return codeUnits
   }
 
   public // @testable
   func _withNFCCodeUnits(_ f: (UInt8) throws -> Void) rethrows {
-    try _gutsSlice.withNFCCodeUnitsIterator_2 {
-      for cu in $0 {
-        try f(cu)
+    try _gutsSlice._withNFCCodeUnits(f)
+  }
+}
+
+extension _StringGutsSlice {
+  internal func _withNFCCodeUnits(_ f: (UInt8) throws -> Void) rethrows {
+    var output = _FixedArray16<UInt8>(allZeros: ())
+    var icuInput = _FixedArray16<UInt16>(allZeros: ())
+    var icuOutput = _FixedArray16<UInt16>(allZeros: ())
+    if _fastPath(isFastUTF8) {
+      try withFastUTF8 {
+        return try _fastWithNormalizedCodeUnitsImpl(
+          sourceBuffer: $0,
+          outputBuffer: _castOutputBuffer(&output),
+          icuInputBuffer: _castOutputBuffer(&icuInput),
+          icuOutputBuffer: _castOutputBuffer(&icuOutput),
+          f
+        )
       }
+    } else {
+      return try _foreignWithNormalizedCodeUnitsImpl(
+        outputBuffer: _castOutputBuffer(&output),
+        icuInputBuffer: _castOutputBuffer(&icuInput),
+        icuOutputBuffer: _castOutputBuffer(&icuOutput),
+        f
+      )
+    }
+  }
+
+  internal func _foreignWithNormalizedCodeUnitsImpl(
+    outputBuffer: UnsafeMutableBufferPointer<UInt8>,
+    icuInputBuffer: UnsafeMutableBufferPointer<UInt16>,
+    icuOutputBuffer: UnsafeMutableBufferPointer<UInt16>,
+    _ f: (UInt8) throws -> Void
+  ) rethrows {
+    var outputBuffer = outputBuffer
+    var icuInputBuffer = icuInputBuffer
+    var icuOutputBuffer = icuOutputBuffer
+  
+    var index = range.lowerBound
+    let cachedEndIndex = range.upperBound
+  
+    var hasBufferOwnership = false
+    
+    defer {
+      if hasBufferOwnership {
+        outputBuffer.deallocate()
+        icuInputBuffer.deallocate()
+        icuOutputBuffer.deallocate()
+      }
+    }
+    
+    while index < cachedEndIndex {
+      let result = _foreignNormalize(
+        readIndex: index,
+        endIndex: cachedEndIndex,
+        guts: _guts,
+        outputBuffer: &outputBuffer,
+        icuInputBuffer: &icuInputBuffer,
+        icuOutputBuffer: &icuOutputBuffer
+      )
+      for i in 0..<result.amountFilled {
+        try f(outputBuffer[i])
+      }
+      _internalInvariant(result.nextReadPosition != index)
+      index = result.nextReadPosition
+      if result.allocatedBuffers {
+        _internalInvariant(!hasBufferOwnership)
+        hasBufferOwnership = true
+      }
+    }
+  }
+}
+
+internal func _fastWithNormalizedCodeUnitsImpl(
+  sourceBuffer: UnsafeBufferPointer<UInt8>,
+  outputBuffer: UnsafeMutableBufferPointer<UInt8>,
+  icuInputBuffer: UnsafeMutableBufferPointer<UInt16>,
+  icuOutputBuffer: UnsafeMutableBufferPointer<UInt16>,
+  _ f: (UInt8) throws -> Void
+) rethrows {
+  var outputBuffer = outputBuffer
+  var icuInputBuffer = icuInputBuffer
+  var icuOutputBuffer = icuOutputBuffer
+
+  var index = String.Index(_encodedOffset: 0)
+  let cachedEndIndex = String.Index(_encodedOffset: sourceBuffer.count)
+  
+  var hasBufferOwnership = false
+  
+  defer {
+    if hasBufferOwnership {
+      outputBuffer.deallocate()
+      icuInputBuffer.deallocate()
+      icuOutputBuffer.deallocate()
+    }
+  }
+  
+  while index < cachedEndIndex {
+    let result = _fastNormalize(
+      readIndex: index,
+      sourceBuffer: sourceBuffer,
+      outputBuffer: &outputBuffer,
+      icuInputBuffer: &icuInputBuffer,
+      icuOutputBuffer: &icuOutputBuffer
+    )
+    for i in 0..<result.amountFilled {
+      try f(outputBuffer[i])
+    }
+    _internalInvariant(result.nextReadPosition != index)
+    index = result.nextReadPosition
+    if result.allocatedBuffers {
+      _internalInvariant(!hasBufferOwnership)
+      hasBufferOwnership = true
     }
   }
 }

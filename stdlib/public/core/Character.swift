@@ -61,7 +61,7 @@
 /// [glossary]: http://www.unicode.org/glossary/
 /// [clusters]: http://www.unicode.org/glossary/#extended_grapheme_cluster
 /// [scalars]: http://www.unicode.org/glossary/#unicode_scalar_value
-@_fixed_layout
+@frozen
 public struct Character {
   @usableFromInline
   internal var _str: String
@@ -79,32 +79,35 @@ extension Character {
   #else
   @usableFromInline @inline(never) @_effects(releasenone)
   internal func _invariantCheck() {
-    _sanityCheck(_str.count == 1)
-    _sanityCheck(_str._guts.isFastUTF8)
+    _internalInvariant(_str.count == 1)
+    _internalInvariant(_str._guts.isFastUTF8)
+
+    _internalInvariant(_str._guts._object.isPreferredRepresentation)
   }
   #endif // INTERNAL_CHECKS_ENABLED
 }
 
 extension Character {
-  @usableFromInline
-  typealias UTF8View = String.UTF8View
+  /// A view of a character's contents as a collection of UTF-8 code units. See
+  /// String.UTF8View for more information
+  public typealias UTF8View = String.UTF8View
 
+  /// A UTF-8 encoding of `self`.
   @inlinable
-  internal var utf8: UTF8View {
-    return _str.utf8
-  }
-  @usableFromInline
-  typealias UTF16View = String.UTF16View
+  public var utf8: UTF8View { return _str.utf8 }
 
+  /// A view of a character's contents as a collection of UTF-16 code units. See
+  /// String.UTF16View for more information
+  public typealias UTF16View = String.UTF16View
+
+  /// A UTF-16 encoding of `self`.
   @inlinable
-  internal var utf16: UTF16View {
-    return _str.utf16
-  }
+  public var utf16: UTF16View { return _str.utf16 }
+
   public typealias UnicodeScalarView = String.UnicodeScalarView
+
   @inlinable
-  public var unicodeScalars: UnicodeScalarView {
-    return _str.unicodeScalars
-  }
+  public var unicodeScalars: UnicodeScalarView { return _str.unicodeScalars }
 }
 
 extension Character :
@@ -173,20 +176,25 @@ extension Character :
       "Can't form a Character from an empty String")
     _debugPrecondition(s.index(after: s.startIndex) == s.endIndex,
       "Can't form a Character from a String containing more than one extended grapheme cluster")
-    self.init(unchecked: s)
+
+    if _fastPath(s._guts._object.isPreferredRepresentation) {
+      self.init(unchecked: s)
+      return
+    }
+    self.init(unchecked: String._copying(s))
   }
 }
 
-extension Character : CustomStringConvertible {
+extension Character: CustomStringConvertible {
  @inlinable
  public var description: String {
    return _str
  }
 }
 
-extension Character : LosslessStringConvertible { }
+extension Character: LosslessStringConvertible { }
 
-extension Character : CustomDebugStringConvertible {
+extension Character: CustomDebugStringConvertible {
  /// A textual representation of the character, suitable for debugging.
  public var debugDescription: String {
    return _str.debugDescription
@@ -203,7 +211,7 @@ extension String {
   }
 }
 
-extension Character : Equatable {
+extension Character: Equatable {
   @inlinable @inline(__always)
   @_effects(readonly)
   public static func == (lhs: Character, rhs: Character) -> Bool {
@@ -211,7 +219,7 @@ extension Character : Equatable {
   }
 }
 
-extension Character : Comparable {
+extension Character: Comparable {
   @inlinable @inline(__always)
   @_effects(readonly)
   public static func < (lhs: Character, rhs: Character) -> Bool {

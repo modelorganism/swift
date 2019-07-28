@@ -11,6 +11,14 @@
 // RUN-FIXME: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOAD2 | %FileCheck %s -check-prefix=OVERLOAD2
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOAD3 | %FileCheck %s -check-prefix=OVERLOAD3
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOAD4 | %FileCheck %s -check-prefix=OVERLOAD4
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOAD5 | %FileCheck %s -check-prefix=OVERLOAD5
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOAD6 | %FileCheck %s -check-prefix=OVERLOAD6
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OVERLOAD7 | %FileCheck %s -check-prefix=OVERLOAD6
+
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=HASERROR1 | %FileCheck %s -check-prefix=HASERROR1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=HASERROR2 | %FileCheck %s -check-prefix=HASERROR2
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=HASERROR3 | %FileCheck %s -check-prefix=HASERROR3
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=HASERROR4 | %FileCheck %s -check-prefix=HASERROR4
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER1 | %FileCheck %s -check-prefix=MEMBER1
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER2 | %FileCheck %s -check-prefix=MEMBER2
@@ -58,6 +66,33 @@
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=SUBSCRIPT_2_DOT | %FileCheck %s -check-prefix=SUBSCRIPT_2_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=SUBSCRIPT_3 | %FileCheck %s -check-prefix=SUBSCRIPT_3
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=SUBSCRIPT_3_DOT | %FileCheck %s -check-prefix=SUBSCRIPT_3_DOT
+
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ERRORCONTEXT_NESTED_1 | %FileCheck %s -check-prefix=ERRORCONTEXT_NESTED_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ERRORCONTEXT_NESTED_2 | %FileCheck %s -check-prefix=ERRORCONTEXT_NESTED_1
+
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CURRIED_SELF_1 | %FileCheck %s -check-prefix=CURRIED_SELF_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CURRIED_SELF_2 | %FileCheck %s -check-prefix=CURRIED_SELF_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CURRIED_SELF_3 | %FileCheck %s -check-prefix=CURRIED_SELF_1
+
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=STATIC_METHOD_AFTERPAREN_1 | %FileCheck %s -check-prefix=STATIC_METHOD_AFTERPAREN_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=STATIC_METHOD_AFTERPAREN_2 | %FileCheck %s -check-prefix=STATIC_METHOD_AFTERPAREN_2
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=STATIC_METHOD_SECOND | %FileCheck %s -check-prefix=STATIC_METHOD_SECOND
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=STATIC_METHOD_SKIPPED | %FileCheck %s -check-prefix=STATIC_METHOD_SKIPPED
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_AFTERPAREN_1 | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_AFTERPAREN_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_AFTERPAREN_2 | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_AFTERPAREN_2
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_SECOND | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_SECOND
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_SKIPPED | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_SKIPPED
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_ARRAY_1_AFTERPAREN_1 | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_AFTERPAREN_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_ARRAY_1_AFTERPAREN_2 | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_AFTERPAREN_2
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_ARRAY_1_SECOND | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_SECOND
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_ARRAY_1_SKIPPED | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_SKIPPED
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_ARRAY_2_AFTERPAREN_1 | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_AFTERPAREN_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_ARRAY_2_AFTERPAREN_2 | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_AFTERPAREN_2
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_ARRAY_2_SECOND | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_SECOND
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=IMPLICIT_MEMBER_ARRAY_2_SKIPPED | %FileCheck %s -check-prefix=IMPLICIT_MEMBER_SKIPPED
+
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ARCHETYPE_GENERIC_1 | %FileCheck %s -check-prefix=ARCHETYPE_GENERIC_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PARAM_WITH_ERROR_AUTOCLOSURE| %FileCheck %s -check-prefix=PARAM_WITH_ERROR_AUTOCLOSURE
 
 var i1 = 1
 var i2 = 2
@@ -157,7 +192,7 @@ class C1 {
 // EXPECT_INT-DAG: Decl[FreeFunction]/CurrModule/TypeRelation[Identical]: intGen()[#Int#]; name=intGen()
 // EXPECT_INT-DAG: Decl[GlobalVar]/CurrModule/TypeRelation[Identical]: i1[#Int#]; name=i1
 // EXPECT_INT-DAG: Decl[GlobalVar]/CurrModule/TypeRelation[Identical]: i2[#Int#]; name=i2
-// EXPECT_INT-DAT: Decl[Struct]/OtherModule[Swift]/TypeRelation[Identical]: Int[#Int#]
+// EXPECT_INT-DAG: Decl[Struct]/OtherModule[Swift]/TypeRelation[Identical]: Int[#Int#]
 // EXPECT_INT-DAG: Decl[FreeFunction]/CurrModule:      ointGen()[#Int?#]; name=ointGen()
 // EXPECT_INT-DAG: Decl[GlobalVar]/CurrModule:         oi1[#Int?#]; name=oi1
 // EXPECT_INT-DAG: Decl[GlobalVar]/CurrModule:         os2[#String?#]; name=os2
@@ -215,11 +250,24 @@ class C3 {
   func f2() {
     foo2(C2I, #^OVERLOAD2^#)
   }
-  func f2() {
+  func f3() {
     foo2(C1I, b1: #^OVERLOAD3^#)
   }
-  func f2() {
+  func f4() {
     foo2(C2I, b2: #^OVERLOAD4^#)
+  }
+
+  func f5() {
+    foo2(#^OVERLOAD5^#
+  }
+
+  func overloaded(_ a1: C1, b1: C2) {}
+  func overloaded(a2: C2, b2: C1) {}
+
+  func f6(obj: C3) {
+    overloaded(#^OVERLOAD6^#
+    func sync() {}
+    obj.overloaded(#^OVERLOAD7^#
   }
 }
 
@@ -250,6 +298,49 @@ class C3 {
 
 // FIXME: This should be a negative test case
 // NEGATIVE_OVERLOAD4-NOT: Decl[Class]{{.*}} C2
+
+// OVERLOAD5: Begin completions
+// OVERLOAD5-DAG: Decl[FreeFunction]/CurrModule:      ['(']{#(a): C1#}, {#b1: C2#}[')'][#Void#]; name=a: C1, b1: C2
+// OVERLOAD5-DAG: Decl[FreeFunction]/CurrModule:      ['(']{#(a): C2#}, {#b2: C1#}[')'][#Void#]; name=a: C2, b2: C1
+// OVERLOAD5-DAG: Decl[InstanceVar]/CurrNominal/TypeRelation[Identical]: C1I[#C1#]; name=C1I
+// OVERLOAD5-DAG: Decl[InstanceVar]/CurrNominal/TypeRelation[Identical]: C2I[#C2#]; name=C2I
+// OVERLOAD5: End completions
+
+// OVERLOAD6: Begin completions
+// OVERLOAD6-DAG: Decl[InstanceMethod]/CurrNominal:   ['(']{#(a1): C1#}, {#b1: C2#}[')'][#Void#]; name=a1: C1, b1: C2
+// OVERLOAD6-DAG: Decl[InstanceMethod]/CurrNominal:   ['(']{#a2: C2#}, {#b2: C1#}[')'][#Void#]; name=a2: C2, b2: C1
+// OVERLOAD6-DAG: Decl[InstanceVar]/CurrNominal/TypeRelation[Identical]: C1I[#C1#]; name=C1I
+// OVERLOAD6-DAG: Decl[InstanceVar]/CurrNominal:      C2I[#C2#]; name=C2I
+// OVERLOAD6: End completions
+
+extension C3 {
+  func hasError(a1: C1, b1: TypeInvalid) -> Int {}
+
+  func f7(obj: C3) {
+    let _ = obj.hasError(#^HASERROR1^#
+    let _ = obj.hasError(a1: #^HASERROR2^#
+    let _ = obj.hasError(a1: IC1, #^HASERROR3^#
+    let _ = obj.hasError(a1: IC1, b1: #^HASERROR4^#
+  }
+}
+
+// HASERROR1: Begin completions
+// HASERROR1-DAG: Decl[InstanceMethod]/CurrNominal: ['(']{#a1: C1#}, {#b1: <<error type>>#}[')'][#Int#];
+// HASERROR1: End completions
+
+// HASERROR2: Begin completions
+// HASERROR2-DAG: Decl[InstanceVar]/CurrNominal/TypeRelation[Identical]: C1I[#C1#];
+// HASERROR2-DAG: Decl[InstanceVar]/CurrNominal:      C2I[#C2#];
+// HASERROR2: End completions
+
+// HASERROR3: Begin completions
+// HASERROR3-DAG: Keyword/ExprSpecific:               b1: [#Argument name#];
+// HASERROR3: End completions
+
+// HASERROR4: Begin completions
+// HASERROR4-DAG: Decl[InstanceVar]/CurrNominal:      C1I[#C1#];
+// HASERROR4-DAG: Decl[InstanceVar]/CurrNominal:      C2I[#C2#];
+// HASERROR4: End completions
 
 class C4 {
   func f1(_ G : Gen) {
@@ -372,7 +463,7 @@ func testArg2Name3() {
   firstArg(#^FIRST_ARG_NAME_3^#,
 }
 // FIRST_ARG_NAME_3: Keyword/ExprSpecific: arg1: [#Argument name#]
-// FIRST_ARG_NAME_4: Pattern/CurrModule: ['(']{#arg1: Int#}, {#arg2: Int#}[')'][#Void#];
+// FIRST_ARG_NAME_4: Decl[FreeFunction]/CurrModule: ['(']{#arg1: Int#}, {#arg2: Int#}[')'][#Void#];
 
 func takeArray<T>(_ x: [T]) {}
 struct TestBoundGeneric1 {
@@ -384,9 +475,8 @@ struct TestBoundGeneric1 {
   func test2() {
     takeArray(#^BOUND_GENERIC_1_2^#)
   }
-// FIXME: These should be convertible to [T]. rdar://problem/24570603
-// BOUND_GENERIC_1: Decl[InstanceVar]/CurrNominal:      x[#[Int]#];
-// BOUND_GENERIC_1: Decl[InstanceVar]/CurrNominal:      y[#[Int]#];
+// BOUND_GENERIC_1: Decl[InstanceVar]/CurrNominal/TypeRelation[Convertible]: x[#[Int]#];
+// BOUND_GENERIC_1: Decl[InstanceVar]/CurrNominal/TypeRelation[Convertible]: y[#[Int]#];
 }
 
 func whereConvertible<T>(lhs: T, rhs: T) where T: Collection {
@@ -413,8 +503,9 @@ _ = EmptyOverload(foo: #^EMPTY_OVERLOAD_2^#)
 public func fopen() -> TestBoundGeneric1! { fatalError() }
 func other() {
   _ = fopen(#^CALLARG_IUO^#)
-// CALLARG_IUO-NOT: Begin completions
-// CALLARG_IUO-NOT: End completions
+// CALLARG_IUO: Begin completions, 1 items
+// CALLARG_IUO: Decl[FreeFunction]/CurrModule: ['('][')'][#TestBoundGeneric1!#]; name=
+// CALLARG_IUO: End completions
 }
 
 class Foo { let x: Int }
@@ -508,4 +599,155 @@ func testSubscript(obj: HasSubscript, intValue: Int, strValue: String) {
 // SUBSCRIPT_3_DOT-DAG: Decl[Constructor]/CurrNominal/TypeRelation[Identical]: init()[#String#]; name=init()
 // SUBSCRIPT_3_DOT-DAG: Decl[Constructor]/CurrNominal/TypeRelation[Identical]: init({#(c): Character#})[#String#]; name=init(c: Character)
 
+}
+
+func testNestedContext() {
+  func foo(_ x: Int) {}
+  func bar(_ y: TypeInvalid) -> Int {}
+
+  let _ = foo(bar(#^ERRORCONTEXT_NESTED_1^#))
+// ERRORCONTEXT_NESTED_1: Begin completions
+// ERRORCONTEXT_NESTED_1-DAG: Decl[GlobalVar]/CurrModule: i1[#Int#]; name=i1
+// ERRORCONTEXT_NESTED_1-DAG: Decl[GlobalVar]/CurrModule: i2[#Int#]; name=i2
+// ERRORCONTEXT_NESTED_1-NOT: TypeRelation[Identical]
+
+  for _ in [bar(#^ERRORCONTEXT_NESTED_2^#)] {}
+// Same as ERRORCONTEXT_NESTED_1.
+}
+
+class TestImplicitlyCurriedSelf {
+  func foo(x: Int) { }
+  func foo(arg: Int, optArg: Int) { }
+
+  static func test() {
+    foo(#^CURRIED_SELF_1^#
+    func sync();
+    self.foo(#^CURRIED_SELF_2^#
+    func sync();
+    TestImplicitlyCurriedSelf.foo(#^CURRIED_SELF_3^#
+
+// CURRIED_SELF_1: Begin completions, 2 items
+// CURRIED_SELF_1-DAG: Decl[InstanceMethod]/CurrNominal: ['(']{#(self): TestImplicitlyCurriedSelf#}[')'][#(Int) -> ()#]{{; name=.+$}}
+// CURRIED_SELF_1-DAG: Decl[InstanceMethod]/CurrNominal: ['(']{#(self): TestImplicitlyCurriedSelf#}[')'][#(Int, Int) -> ()#]{{; name=.+$}}
+// CURRIED_SELF_1: End completions
+  }
+}
+
+class TestStaticMemberCall {
+  static func create1(arg1: Int) -> TestStaticMemberCall {
+    return TestStaticMemberCall()
+  }
+  static func create2(_ arg1: Int, arg2: Int = 0, arg3: Int = 1, arg4: Int = 2) -> TestStaticMemberCall {
+    return TestStaticMemberCall()
+  }
+}
+func testStaticMemberCall() {
+  let _ = TestStaticMemberCall.create1(#^STATIC_METHOD_AFTERPAREN_1^#)
+// STATIC_METHOD_AFTERPAREN_1: Begin completions, 1 items
+// STATIC_METHOD_AFTERPAREN_1: Decl[StaticMethod]/CurrNominal:     ['(']{#arg1: Int#}[')'][#TestStaticMemberCall#]; name=arg1: Int
+// STATIC_METHOD_AFTERPAREN_1: End completions
+
+  let _ = TestStaticMemberCall.create2(#^STATIC_METHOD_AFTERPAREN_2^#)
+// STATIC_METHOD_AFTERPAREN_2: Begin completions
+// STATIC_METHOD_AFTERPAREN_2-DAG: Decl[StaticMethod]/CurrNominal/TypeRelation[Identical]: ['(']{#(arg1): Int#}[')'][#TestStaticMemberCall#];
+// STATIC_METHOD_AFTERPAREN_2-DAG: Decl[StaticMethod]/CurrNominal/TypeRelation[Identical]: ['(']{#(arg1): Int#}, {#arg2: Int#}, {#arg3: Int#}, {#arg4: Int#}[')'][#TestStaticMemberCall#];
+// STATIC_METHOD_AFTERPAREN_2-DAG: Decl[Struct]/OtherModule[Swift]/TypeRelation[Identical]: Int[#Int#];
+// STATIC_METHOD_AFTERPAREN_2-DAG: Literal[Integer]/None/TypeRelation[Identical]: 0[#Int#];
+// STATIC_METHOD_AFTERPAREN_2: End completions
+
+  let _ = TestStaticMemberCall.create2(1, #^STATIC_METHOD_SECOND^#)
+// STATIC_METHOD_SECOND: Begin completions, 3 items
+// STATIC_METHOD_SECOND: Keyword/ExprSpecific:               arg2: [#Argument name#];
+// STATIC_METHOD_SECOND: Keyword/ExprSpecific:               arg3: [#Argument name#];
+// STATIC_METHOD_SECOND: Keyword/ExprSpecific:               arg4: [#Argument name#];
+// STATIC_METHOD_SECOND: End completions
+
+  let _ = TestStaticMemberCall.create2(1, arg3: 2, #^STATIC_METHOD_SKIPPED^#)
+// STATIC_METHOD_SKIPPED: Begin completions, 2 items
+// FIXME: 'arg3' shouldn't be suggested.
+// STATIC_METHOD_SKIPPED: Keyword/ExprSpecific:               arg3: [#Argument name#];
+// STATIC_METHOD_SKIPPED: Keyword/ExprSpecific:               arg4: [#Argument name#];
+// STATIC_METHOD_SKIPPED: End completions
+}
+func testImplicitMember() {
+  let _: TestStaticMemberCall = .create1(#^IMPLICIT_MEMBER_AFTERPAREN_1^#)
+// IMPLICIT_MEMBER_AFTERPAREN_1: Begin completions, 1 items
+// IMPLICIT_MEMBER_AFTERPAREN_1: Decl[StaticMethod]/CurrNominal:     ['(']{#arg1: Int#}[')'][#TestStaticMemberCall#]; name=arg1: Int
+// IMPLICIT_MEMBER_AFTERPAREN_1: End completions
+
+  let _: TestStaticMemberCall = .create2(#^IMPLICIT_MEMBER_AFTERPAREN_2^#)
+// IMPLICIT_MEMBER_AFTERPAREN_2: Begin completions
+// IMPLICIT_MEMBER_AFTERPAREN_2-DAG: Decl[StaticMethod]/CurrNominal:     ['(']{#(arg1): Int#}[')'][#TestStaticMemberCall#];
+// IMPLICIT_MEMBER_AFTERPAREN_2-DAG: Decl[StaticMethod]/CurrNominal:     ['(']{#(arg1): Int#}, {#arg2: Int#}, {#arg3: Int#}, {#arg4: Int#}[')'][#TestStaticMemberCall#];
+// IMPLICIT_MEMBER_AFTERPAREN_2-DAG: Decl[Struct]/OtherModule[Swift]/TypeRelation[Identical]: Int[#Int#];
+// IMPLICIT_MEMBER_AFTERPAREN_2-DAG: Literal[Integer]/None/TypeRelation[Identical]: 0[#Int#];
+// IMPLICIT_MEMBER_AFTERPAREN_2: End completions
+
+  let _: TestStaticMemberCall = .create2(1, #^IMPLICIT_MEMBER_SECOND^#)
+// IMPLICIT_MEMBER_SECOND: Begin completions, 3 items
+// IMPLICIT_MEMBER_SECOND: Keyword/ExprSpecific:               arg2: [#Argument name#];
+// IMPLICIT_MEMBER_SECOND: Keyword/ExprSpecific:               arg3: [#Argument name#];
+// IMPLICIT_MEMBER_SECOND: Keyword/ExprSpecific:               arg4: [#Argument name#];
+// IMPLICIT_MEMBER_SECOND: End completions
+
+  let _: TestStaticMemberCall = .create2(1, arg3: 2, #^IMPLICIT_MEMBER_SKIPPED^#)
+// IMPLICIT_MEMBER_SKIPPED: Begin completions, 2 items
+// FIXME: 'arg3' shouldn't be suggested.
+// IMPLICIT_MEMBER_SKIPPED: Keyword/ExprSpecific:               arg3: [#Argument name#];
+// IMPLICIT_MEMBER_SKIPPED: Keyword/ExprSpecific:               arg4: [#Argument name#];
+// IMPLICIT_MEMBER_SKIPPED: End completions
+}
+func testImplicitMemberInArrayLiteral() {
+  struct Receiver {
+    init(_: [TestStaticMemberCall]) {}
+    init(arg1: Int, arg2: [TestStaticMemberCall]) {}
+  }
+
+  Receiver([
+    .create1(x: 1),
+    .create1(#^IMPLICIT_MEMBER_ARRAY_1_AFTERPAREN_1^#),
+    // Same as IMPLICIT_MEMBER_AFTERPAREN_1.
+  ])
+  Receiver([
+    .create2(#^IMPLICIT_MEMBER_ARRAY_1_AFTERPAREN_2^#),
+    // Same as IMPLICIT_MEMBER_AFTERPAREN_2.
+    .create2(1, #^IMPLICIT_MEMBER_ARRAY_1_SECOND^#
+    // Same as IMPLICIT_MEMBER_SECOND.
+  ])
+  Receiver(arg1: 12, arg2: [
+    .create2(1, arg3: 2, #^IMPLICIT_MEMBER_ARRAY_1_SKIPPED^#
+    // Same as IMPLICIT_MEMBER_SKIPPED.
+    .create1(x: 12)
+  ])
+  let _: [TestStaticMemberCall] = [
+    .create1(#^IMPLICIT_MEMBER_ARRAY_2_AFTERPAREN_1^#),
+    // Same as STATIC_METHOD_AFTERPAREN_1.
+    .create2(#^IMPLICIT_MEMBER_ARRAY_2_AFTERPAREN_2^#),
+    // Same as STATIC_METHOD_AFTERPAREN_2.
+    .create2(1, #^IMPLICIT_MEMBER_ARRAY_2_SECOND^#),
+    // Same as STATIC_METHOD_SECOND.
+    .create2(1, arg3: 2, #^IMPLICIT_MEMBER_ARRAY_2_SKIPPED^#),
+    // Same as STATIC_METHOD_SKIPPED.
+  ]
+}
+
+struct Wrap<T> {
+  func method<U>(_ fn: (T) -> U) -> Wrap<U> {}
+}
+func testGenricMethodOnGenericOfArchetype<Wrapped>(value: Wrap<Wrapped>) {
+  value.method(#^ARCHETYPE_GENERIC_1^#)
+// ARCHETYPE_GENERIC_1: Begin completions
+// ARCHETYPE_GENERIC_1: Decl[InstanceMethod]/CurrNominal:   ['(']{#(fn): (Wrapped) -> _##(Wrapped) -> _#}[')'][#Wrap<_>#];
+}
+
+struct TestHasErrorAutoclosureParam {
+  func hasErrorAutoclosureParam(value: @autoclosure () -> Value) {
+    fatalError()
+  }
+  func test() {
+    hasErrorAutoclosureParam(#^PARAM_WITH_ERROR_AUTOCLOSURE^#
+// PARAM_WITH_ERROR_AUTOCLOSURE: Begin completions, 1 items
+// PARAM_WITH_ERROR_AUTOCLOSURE: Decl[InstanceMethod]/CurrNominal:   ['(']{#value: <<error type>>#}[')'][#Void#];
+// PARAM_WITH_ERROR_AUTOCLOSURE: End completions
+  }
 }

@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 /// Buffer type for `ArraySlice<Element>`.
-@_fixed_layout
+@frozen
 @usableFromInline
 internal struct _SliceBuffer<Element>
   : _ArrayBufferProtocol,
@@ -20,6 +20,36 @@ internal struct _SliceBuffer<Element>
   internal typealias NativeStorage = _ContiguousArrayStorage<Element>
   @usableFromInline
   internal typealias NativeBuffer = _ContiguousArrayBuffer<Element>
+
+  /// An object that keeps the elements stored in this buffer alive.
+  @usableFromInline
+  internal var owner: AnyObject
+
+  @usableFromInline
+  internal let subscriptBaseAddress: UnsafeMutablePointer<Element>
+
+  /// The position of the first element in a non-empty collection.
+  ///
+  /// In an empty collection, `startIndex == endIndex`.
+  @usableFromInline
+  internal var startIndex: Int
+
+  /// [63:1: 63-bit index][0: has a native buffer]
+  @usableFromInline
+  internal var endIndexAndFlags: UInt
+
+  @inlinable
+  internal init(
+    owner: AnyObject,
+    subscriptBaseAddress: UnsafeMutablePointer<Element>,
+    startIndex: Int,
+    endIndexAndFlags: UInt
+  ) {
+    self.owner = owner
+    self.subscriptBaseAddress = subscriptBaseAddress
+    self.startIndex = startIndex
+    self.endIndexAndFlags = endIndexAndFlags
+  }
 
   @inlinable
   internal init(
@@ -58,9 +88,9 @@ internal struct _SliceBuffer<Element>
   internal func _invariantCheck() {
     let isNative = _hasNativeBuffer
     let isNativeStorage: Bool = owner is __ContiguousArrayStorageBase
-    _sanityCheck(isNativeStorage == isNative)
+    _internalInvariant(isNativeStorage == isNative)
     if isNative {
-      _sanityCheck(count <= nativeBuffer.count)
+      _internalInvariant(count <= nativeBuffer.count)
     }
   }
 
@@ -71,14 +101,14 @@ internal struct _SliceBuffer<Element>
 
   @inlinable
   internal var nativeBuffer: NativeBuffer {
-    _sanityCheck(_hasNativeBuffer)
+    _internalInvariant(_hasNativeBuffer)
     return NativeBuffer(
       owner as? __ContiguousArrayStorageBase ?? _emptyArrayStorage)
   }
 
   @inlinable
   internal var nativeOwner: AnyObject {
-    _sanityCheck(_hasNativeBuffer, "Expect a native array")
+    _internalInvariant(_hasNativeBuffer, "Expect a native array")
     return owner
   }
 
@@ -93,13 +123,13 @@ internal struct _SliceBuffer<Element>
     _ subrange: Range<Int>,
     with insertCount: Int,
     elementsOf newValues: __owned C
-  ) where C : Collection, C.Element == Element {
+  ) where C: Collection, C.Element == Element {
 
     _invariantCheck()
-    _sanityCheck(insertCount <= numericCast(newValues.count))
+    _internalInvariant(insertCount <= numericCast(newValues.count))
 
-    _sanityCheck(_hasNativeBuffer)
-    _sanityCheck(isUniquelyReferenced())
+    _internalInvariant(_hasNativeBuffer)
+    _internalInvariant(isUniquelyReferenced())
 
     let eraseCount = subrange.count
     let growth = insertCount - eraseCount
@@ -108,7 +138,7 @@ internal struct _SliceBuffer<Element>
     var native = nativeBuffer
     let hiddenElementCount = firstElementAddress - native.firstElementAddress
 
-    _sanityCheck(native.count + growth <= native.capacity)
+    _internalInvariant(native.count + growth <= native.capacity)
 
     let start = subrange.lowerBound - startIndex + hiddenElementCount
     let end = subrange.upperBound - startIndex + hiddenElementCount
@@ -130,12 +160,6 @@ internal struct _SliceBuffer<Element>
     return UnsafeRawPointer(firstElementAddress)
   }
 
-  /// An object that keeps the elements stored in this buffer alive.
-  @usableFromInline
-  internal var owner: AnyObject
-  @usableFromInline
-  internal let subscriptBaseAddress: UnsafeMutablePointer<Element>
-
   @inlinable
   internal var firstElementAddress: UnsafeMutablePointer<Element> {
     return subscriptBaseAddress + startIndex
@@ -145,10 +169,6 @@ internal struct _SliceBuffer<Element>
   internal var firstElementAddressIfContiguous: UnsafeMutablePointer<Element>? {
     return firstElementAddress
   }
-
-  /// [63:1: 63-bit index][0: has a native buffer]
-  @usableFromInline
-  internal var endIndexAndFlags: UInt
 
   //===--- Non-essential bits ---------------------------------------------===//
 
@@ -226,12 +246,20 @@ internal struct _SliceBuffer<Element>
     initializing target: UnsafeMutablePointer<Element>
   ) -> UnsafeMutablePointer<Element> {
     _invariantCheck()
-    _sanityCheck(bounds.lowerBound >= startIndex)
-    _sanityCheck(bounds.upperBound >= bounds.lowerBound)
-    _sanityCheck(bounds.upperBound <= endIndex)
+    _internalInvariant(bounds.lowerBound >= startIndex)
+    _internalInvariant(bounds.upperBound >= bounds.lowerBound)
+    _internalInvariant(bounds.upperBound <= endIndex)
     let c = bounds.count
     target.initialize(from: subscriptBaseAddress + bounds.lowerBound, count: c)
     return target + c
+  }
+
+  public __consuming func _copyContents(
+    initializing buffer: UnsafeMutableBufferPointer<Element>
+  ) -> (Iterator,UnsafeMutableBufferPointer<Element>.Index) {
+    // This customization point is not implemented for internal types.
+    // Accidentally calling it would be a catastrophic performance bug.
+    fatalError("unsupported")
   }
 
   /// True, if the array is native and does not need a deferred type check.
@@ -258,7 +286,7 @@ internal struct _SliceBuffer<Element>
   /// Traps unless the given `index` is valid for subscripting, i.e.
   /// `startIndex ≤ index < endIndex`
   @inlinable
-  internal func _checkValidSubscript(_ index : Int) {
+  internal func _checkValidSubscript(_ index: Int) {
     _precondition(
       index >= startIndex && index < endIndex, "Index out of bounds")
   }
@@ -284,8 +312,8 @@ internal struct _SliceBuffer<Element>
 
   @inlinable
   internal func getElement(_ i: Int) -> Element {
-    _sanityCheck(i >= startIndex, "slice index is out of range (before startIndex)")
-    _sanityCheck(i < endIndex, "slice index is out of range")
+    _internalInvariant(i >= startIndex, "slice index is out of range (before startIndex)")
+    _internalInvariant(i < endIndex, "slice index is out of range")
     return subscriptBaseAddress[i]
   }
 
@@ -299,8 +327,8 @@ internal struct _SliceBuffer<Element>
       return getElement(position)
     }
     nonmutating set {
-      _sanityCheck(position >= startIndex, "slice index is out of range (before startIndex)")
-      _sanityCheck(position < endIndex, "slice index is out of range")
+      _internalInvariant(position >= startIndex, "slice index is out of range (before startIndex)")
+      _internalInvariant(position < endIndex, "slice index is out of range")
       subscriptBaseAddress[position] = newValue
     }
   }
@@ -308,9 +336,9 @@ internal struct _SliceBuffer<Element>
   @inlinable
   internal subscript(bounds: Range<Int>) -> _SliceBuffer {
     get {
-      _sanityCheck(bounds.lowerBound >= startIndex)
-      _sanityCheck(bounds.upperBound >= bounds.lowerBound)
-      _sanityCheck(bounds.upperBound <= endIndex)
+      _internalInvariant(bounds.lowerBound >= startIndex)
+      _internalInvariant(bounds.upperBound >= bounds.lowerBound)
+      _internalInvariant(bounds.upperBound <= endIndex)
       return _SliceBuffer(
         owner: owner,
         subscriptBaseAddress: subscriptBaseAddress,
@@ -323,11 +351,6 @@ internal struct _SliceBuffer<Element>
   }
 
   //===--- Collection conformance -------------------------------------===//
-  /// The position of the first element in a non-empty collection.
-  ///
-  /// In an empty collection, `startIndex == endIndex`.
-  @usableFromInline
-  internal var startIndex: Int
 
   /// The collection's "past the end" position---that is, the position one
   /// greater than the last valid subscript argument.
@@ -368,6 +391,18 @@ internal struct _SliceBuffer<Element>
     defer { _fixLifetime(self) }
     return try body(
       UnsafeMutableBufferPointer(start: firstElementAddress, count: count))
+  }
+
+  @inlinable
+  internal func unsafeCastElements<T>(to type: T.Type) -> _SliceBuffer<T> {
+    _internalInvariant(_isClassOrObjCExistential(T.self))
+    let baseAddress = UnsafeMutableRawPointer(self.subscriptBaseAddress)
+      .assumingMemoryBound(to: T.self)
+    return _SliceBuffer<T>(
+      owner: self.owner,
+      subscriptBaseAddress: baseAddress,
+      startIndex: self.startIndex,
+      endIndexAndFlags: self.endIndexAndFlags)
   }
 }
 

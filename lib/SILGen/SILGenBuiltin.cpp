@@ -12,6 +12,7 @@
 
 #include "SpecializedEmitter.h"
 
+#include "ArgumentSource.h"
 #include "Cleanup.h"
 #include "Initialization.h"
 #include "LValue.h"
@@ -30,57 +31,29 @@
 using namespace swift;
 using namespace Lowering;
 
-static bool isTrivialShuffle(TupleShuffleExpr *shuffle) {
-  // Each element must be mapped to the corresponding element of the input.
-  auto mapping = shuffle->getElementMapping();
-  for (auto index : indices(mapping)) {
-    if (mapping[index] < 0 || unsigned(mapping[index]) != index)
-      return false;
-  }
-  return true;
-}
-
 /// Break down an expression that's the formal argument expression to
 /// a builtin function, returning its individualized arguments.
 ///
 /// Because these are builtin operations, we can make some structural
 /// assumptions about the expression used to call them.
-static ArrayRef<Expr*> decomposeArguments(SILGenFunction &SGF,
-                                          Expr *arg,
-                                          unsigned expectedCount) {
-  assert(expectedCount >= 2);
-  assert(arg->getType()->is<TupleType>());
-  assert(arg->getType()->castTo<TupleType>()->getNumElements()
-           == expectedCount);
+static Optional<SmallVector<Expr*, 2>>
+decomposeArguments(SILGenFunction &SGF,
+                   SILLocation loc,
+                   PreparedArguments &&args,
+                   unsigned expectedCount) {
+  SmallVector<Expr*, 2> result;
+  auto sources = std::move(args).getSources();
 
-  // The use of owned parameters can trip up CSApply enough to introduce
-  // a trivial tuple shuffle here.
-  arg = arg->getSemanticsProvidingExpr();
-  if (auto shuffle = dyn_cast<TupleShuffleExpr>(arg)) {
-    if (isTrivialShuffle(shuffle))
-      arg = shuffle->getSubExpr();
+  if (sources.size() == expectedCount) {
+    for (auto &&source : sources)
+      result.push_back(std::move(source).asKnownExpr());
+    return result;
   }
 
-  auto tuple = dyn_cast<TupleExpr>(arg);
-  if (tuple && tuple->getElements().size() == expectedCount) {
-    return tuple->getElements();
-  }
-
-  SGF.SGM.diagnose(arg, diag::invalid_sil_builtin,
+  SGF.SGM.diagnose(loc, diag::invalid_sil_builtin,
                    "argument to builtin should be a literal tuple");
 
-  auto tupleTy = arg->getType()->castTo<TupleType>();
-
-  // This is well-typed but may cause code to be emitted redundantly.
-  auto &ctxt = SGF.getASTContext();
-  SmallVector<Expr*, 4> args;
-  for (auto index : indices(tupleTy->getElementTypes())) {
-    Expr *projection = new (ctxt) TupleElementExpr(arg, SourceLoc(),
-                                                   index, SourceLoc(),
-                                          tupleTy->getElementType(index));
-    args.push_back(projection);
-  }
-  return ctxt.AllocateCopy(args);
+  return None;
 }
 
 static ManagedValue emitBuiltinRetain(SILGenFunction &SGF,
@@ -252,9 +225,13 @@ static ManagedValue emitBuiltinAssign(SILGenFunction &SGF,
 static ManagedValue emitBuiltinInit(SILGenFunction &SGF,
                                     SILLocation loc,
                                     SubstitutionMap substitutions,
-                                    Expr *tuple,
+                                    PreparedArguments &&preparedArgs,
                                     SGFContext C) {
-  auto args = decomposeArguments(SGF, tuple, 2);
+  auto argsOrError = decomposeArguments(SGF, loc, std::move(preparedArgs), 2);
+  if (!argsOrError)
+    return ManagedValue::forUnmanaged(SGF.emitEmptyTuple(loc));
+
+  auto args = *argsOrError;
 
   CanType formalType =
     substitutions.getReplacementTypes()[0]->getCanonicalType();
@@ -299,8 +276,7 @@ static ManagedValue emitCastToReferenceType(SILGenFunction &SGF,
   if (!argTy->mayHaveSuperclass() && !argTy->isClassExistentialType()) {
     SGF.SGM.diagnose(loc, diag::invalid_sil_builtin,
                      "castToNativeObject source must be a class");
-    SILValue undef = SILUndef::get(objPointerType, SGF.SGM.M);
-    return ManagedValue::forUnmanaged(undef);
+    return SGF.emitUndef(objPointerType);
   }
 
   // Grab the argument.
@@ -308,7 +284,7 @@ static ManagedValue emitCastToReferenceType(SILGenFunction &SGF,
 
   // If the argument is existential, open it.
   if (argTy->isClassExistentialType()) {
-    auto openedTy = ArchetypeType::getOpened(argTy);
+    auto openedTy = OpenedArchetypeType::get(argTy);
     SILType loweredOpenedTy = SGF.getLoweredLoadableType(openedTy);
     arg = SGF.B.createOpenExistentialRef(loc, arg, loweredOpenedTy);
   }
@@ -362,8 +338,7 @@ static ManagedValue emitCastFromReferenceType(SILGenFunction &SGF,
     SGF.SGM.diagnose(loc, diag::invalid_sil_builtin,
                      "castFromNativeObject dest must be an object type");
     // Recover by propagating an undef result.
-    SILValue result = SILUndef::get(destType, SGF.SGM.M);
-    return ManagedValue::forUnmanaged(result);
+    return SGF.emitUndef(destType);
   }
 
   return SGF.B.createUncheckedRefCast(loc, args[0], destType);
@@ -423,23 +398,29 @@ static ManagedValue emitBuiltinBridgeFromRawPointer(SILGenFunction &SGF,
 static ManagedValue emitBuiltinAddressOf(SILGenFunction &SGF,
                                          SILLocation loc,
                                          SubstitutionMap substitutions,
-                                         Expr *argument,
+                                         PreparedArguments &&preparedArgs,
                                          SGFContext C) {
-  auto rawPointerTy = SILType::getRawPointerType(SGF.getASTContext());
+  SILType rawPointerType = SILType::getRawPointerType(SGF.getASTContext());
+
+  auto argsOrError = decomposeArguments(SGF, loc, std::move(preparedArgs), 1);
+  if (!argsOrError)
+    return SGF.emitUndef(rawPointerType);
+
+  auto argument = (*argsOrError)[0];
+
   // If the argument is inout, try forming its lvalue. This builtin only works
   // if it's trivially physically projectable.
   auto inout = cast<InOutExpr>(argument->getSemanticsProvidingExpr());
   auto lv = SGF.emitLValue(inout->getSubExpr(), SGFAccessKind::ReadWrite);
   if (!lv.isPhysical() || !lv.isLoadingPure()) {
     SGF.SGM.diagnose(argument->getLoc(), diag::non_physical_addressof);
-    return ManagedValue::forUnmanaged(SILUndef::get(rawPointerTy, &SGF.SGM.M));
+    return SGF.emitUndef(rawPointerType);
   }
   
   auto addr = SGF.emitAddressOfLValue(argument, std::move(lv))
                  .getLValueAddress();
   
   // Take the address argument and cast it to RawPointer.
-  SILType rawPointerType = SILType::getRawPointerType(SGF.F.getASTContext());
   SILValue result = SGF.B.createAddressToPointer(loc, addr,
                                                  rawPointerType);
   return ManagedValue::forUnmanaged(result);
@@ -449,9 +430,16 @@ static ManagedValue emitBuiltinAddressOf(SILGenFunction &SGF,
 static ManagedValue emitBuiltinAddressOfBorrow(SILGenFunction &SGF,
                                                SILLocation loc,
                                                SubstitutionMap substitutions,
-                                               Expr *argument,
+                                               PreparedArguments &&preparedArgs,
                                                SGFContext C) {
-  auto rawPointerTy = SILType::getRawPointerType(SGF.getASTContext());
+  SILType rawPointerType = SILType::getRawPointerType(SGF.getASTContext());
+
+  auto argsOrError = decomposeArguments(SGF, loc, std::move(preparedArgs), 1);
+  if (!argsOrError)
+    return SGF.emitUndef(rawPointerType);
+
+  auto argument = (*argsOrError)[0];
+
   SILValue addr;
   // Try to borrow the argument at +0. We only support if it's
   // naturally emitted borrowed in memory.
@@ -459,13 +447,12 @@ static ManagedValue emitBuiltinAddressOfBorrow(SILGenFunction &SGF,
      .getAsSingleValue(SGF, argument);
   if (!borrow.isPlusZero() || !borrow.getType().isAddress()) {
     SGF.SGM.diagnose(argument->getLoc(), diag::non_borrowed_indirect_addressof);
-    return ManagedValue::forUnmanaged(SILUndef::get(rawPointerTy, &SGF.SGM.M));
+    return SGF.emitUndef(rawPointerType);
   }
   
   addr = borrow.getValue();
   
   // Take the address argument and cast it to RawPointer.
-  SILType rawPointerType = SILType::getRawPointerType(SGF.F.getASTContext());
   SILValue result = SGF.B.createAddressToPointer(loc, addr,
                                                  rawPointerType);
   return ManagedValue::forUnmanaged(result);
@@ -631,15 +618,16 @@ static ManagedValue emitBuiltinEndUnpairedAccess(SILGenFunction &SGF,
   return ManagedValue::forUnmanaged(SGF.emitEmptyTuple(loc));
 }
 
-/// Specialized emitter for Builtin.condfail.
-static ManagedValue emitBuiltinCondFail(SILGenFunction &SGF,
-                                        SILLocation loc,
-                                        SubstitutionMap substitutions,
-                                        ArrayRef<ManagedValue> args,
-                                        SGFContext C) {
+/// Specialized emitter for the legacy Builtin.condfail.
+static ManagedValue emitBuiltinLegacyCondFail(SILGenFunction &SGF,
+                                              SILLocation loc,
+                                              SubstitutionMap substitutions,
+                                              ArrayRef<ManagedValue> args,
+                                              SGFContext C) {
   assert(args.size() == 1 && "condfail should be given one argument");
-  
-  SGF.B.createCondFail(loc, args[0].getUnmanagedValue());
+
+  SGF.B.createCondFail(loc, args[0].getUnmanagedValue(),
+    "unknown runtime failure");
   return ManagedValue::forUnmanaged(SGF.emitEmptyTuple(loc));
 }
 
@@ -757,7 +745,7 @@ static ManagedValue emitBuiltinReinterpretCast(SILGenFunction &SGF,
   // Create the appropriate bitcast based on the source and dest types.
   ManagedValue in = args[0];
   SILType resultTy = toTL.getLoweredType();
-  if (resultTy.isTrivial(SGF.getModule()))
+  if (resultTy.isTrivial(SGF.F))
     return SGF.B.createUncheckedTrivialBitCast(loc, in, resultTy);
 
   // If we can perform a ref cast, just return.
@@ -788,8 +776,7 @@ static ManagedValue emitBuiltinCastToBridgeObject(SILGenFunction &SGF,
       !sourceType->isClassExistentialType()) {
     SGF.SGM.diagnose(loc, diag::invalid_sil_builtin,
                      "castToBridgeObject source must be a class");
-    SILValue undef = SILUndef::get(objPointerType, SGF.SGM.M);
-    return ManagedValue::forUnmanaged(undef);
+    return SGF.emitUndef(objPointerType);
   }
 
   ManagedValue ref = args[0];
@@ -797,7 +784,7 @@ static ManagedValue emitBuiltinCastToBridgeObject(SILGenFunction &SGF,
   
   // If the argument is existential, open it.
   if (sourceType->isClassExistentialType()) {
-    auto openedTy = ArchetypeType::getOpened(sourceType);
+    auto openedTy = OpenedArchetypeType::get(sourceType);
     SILType loweredOpenedTy = SGF.getLoweredLoadableType(openedTy);
     ref = SGF.B.createOpenExistentialRef(loc, ref, loweredOpenedTy);
   }
@@ -825,8 +812,7 @@ static ManagedValue emitBuiltinCastReferenceFromBridgeObject(
     SGF.SGM.diagnose(loc, diag::invalid_sil_builtin,
                  "castReferenceFromBridgeObject dest must be an object type");
     // Recover by propagating an undef result.
-    SILValue result = SILUndef::get(destType, SGF.SGM.M);
-    return ManagedValue::forUnmanaged(result);
+    return SGF.emitUndef(destType);
   }
 
   return SGF.B.createBridgeObjectToRef(loc, args[0], destType);
@@ -873,8 +859,7 @@ static ManagedValue emitBuiltinValueToBridgeObject(SILGenFunction &SGF,
     SGF.SGM.diagnose(loc, diag::invalid_sil_builtin,
                      "argument to builtin should be a builtin integer");
     SILType objPointerType = SILType::getBridgeObjectType(SGF.F.getASTContext());
-    SILValue undef = SILUndef::get(objPointerType, SGF.SGM.M);
-    return ManagedValue::forUnmanaged(undef);
+    return SGF.emitUndef(objPointerType);
   }
 
   SILValue result = SGF.B.createValueToBridgeObject(loc, args[0].getValue());
@@ -963,8 +948,11 @@ static ManagedValue emitBuiltinAllocWithTailElems(SILGenFunction &SGF,
   }
   ManagedValue Metatype = args[0];
   if (isa<MetatypeInst>(Metatype)) {
-    assert(Metatype.getType().getMetatypeInstanceType(SGF.SGM.M) == RefType &&
+    auto InstanceType =
+      Metatype.getType().castTo<MetatypeType>().getInstanceType();
+    assert(InstanceType == RefType.getASTType() &&
            "substituted type does not match operand metatype");
+    (void) InstanceType;
     return SGF.B.createAllocRef(loc, RefType, false, false,
                                 ElemTypes, Counts);
   } else {
@@ -1041,6 +1029,28 @@ static ManagedValue emitBuiltinTypeTrait(SILGenFunction &SGF,
   return ManagedValue::forUnmanaged(val);
 }
 
+/// Emit SIL for the named builtin: globalStringTablePointer. Unlike the default
+/// ownership convention for named builtins, which is to take (non-trivial)
+/// arguments as Owned, this builtin accepts owned as well as guaranteed
+/// arguments, and hence doesn't require the arguments to be at +1. Therefore,
+/// this builtin is emitted specially.
+static ManagedValue
+emitBuiltinGlobalStringTablePointer(SILGenFunction &SGF, SILLocation loc,
+                                    SubstitutionMap subs,
+                                    ArrayRef<ManagedValue> args, SGFContext C) {
+  assert(args.size() == 1);
+
+  SILValue argValue = args[0].getValue();
+  auto &astContext = SGF.getASTContext();
+  Identifier builtinId = astContext.getIdentifier(
+      getBuiltinName(BuiltinValueKind::GlobalStringTablePointer));
+
+  auto resultVal = SGF.B.createBuiltin(loc, builtinId,
+                                       SILType::getRawPointerType(astContext),
+                                       subs, ArrayRef<SILValue>(argValue));
+  return SGF.emitManagedRValueWithCleanup(resultVal);
+}
+
 Optional<SpecializedEmitter>
 SpecializedEmitter::forDecl(SILGenModule &SGM, SILDeclRef function) {
   // Only consider standalone declarations in the Builtin module.
@@ -1065,6 +1075,7 @@ SpecializedEmitter::forDecl(SILGenModule &SGM, SILDeclRef function) {
 #define BUILTIN(Id, Name, Attrs)                                            \
   case BuiltinValueKind::Id:
 #define BUILTIN_SIL_OPERATION(Id, Name, Overload)
+#define BUILTIN_MISC_OPERATION_WITH_SILGEN(Id, Name, Attrs, Overload)
 #define BUILTIN_SANITIZER_OPERATION(Id, Name, Attrs)
 #define BUILTIN_TYPE_CHECKER_OPERATION(Id, Name)
 #define BUILTIN_TYPE_TRAIT_OPERATION(Id, Name)
@@ -1081,8 +1092,12 @@ SpecializedEmitter::forDecl(SILGenModule &SGM, SILDeclRef function) {
   case BuiltinValueKind::Id:                                                \
     return SpecializedEmitter(&emitBuiltin##Id);
 
-  // Sanitizer builtins should never directly be called; they should only
-  // be inserted as instrumentation by SILGen.
+#define BUILTIN_MISC_OPERATION_WITH_SILGEN(Id, Name, Attrs, Overload)          \
+  case BuiltinValueKind::Id:                                                   \
+    return SpecializedEmitter(&emitBuiltin##Id);
+
+    // Sanitizer builtins should never directly be called; they should only
+    // be inserted as instrumentation by SILGen.
 #define BUILTIN_SANITIZER_OPERATION(Id, Name, Attrs)                        \
   case BuiltinValueKind::Id:                                                \
     llvm_unreachable("Sanitizer builtin called directly?");

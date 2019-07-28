@@ -55,7 +55,7 @@ namespace driver {
   class JobAction;
   class ToolChain;
 
-/// \brief A class encapsulating information about the outputs the driver
+/// A class encapsulating information about the outputs the driver
 /// is expected to generate.
 class OutputInfo {
 public:
@@ -87,8 +87,17 @@ public:
     Immediate,
   };
 
+  enum class MSVCRuntime {
+    MultiThreaded,
+    MultiThreadedDebug,
+    MultiThreadedDLL,
+    MultiThreadedDebugDLL,
+  };
+
   /// The mode in which the driver should invoke the frontend.
   Mode CompilerMode = Mode::StandardCompile;
+
+  Optional<MSVCRuntime> RuntimeVariant = llvm::None;
 
   /// The output type which should be used for compile actions.
   file_types::ID CompilerOutputType = file_types::ID::TY_INVALID;
@@ -149,7 +158,7 @@ public:
     Interactive,     // swift
     Batch,           // swiftc
     AutolinkExtract, // swift-autolink-extract
-    SwiftFormat      // swift-format
+    SwiftIndent      // swift-indent
   };
 
   class InputInfoMap;
@@ -164,6 +173,9 @@ private:
 
   /// The original path to the executable.
   std::string DriverExecutable;
+
+  // Extra args to pass to the driver executable
+  SmallVector<std::string, 2> DriverExecutableArgs;
 
   DriverKind driverKind = DriverKind::Interactive;
 
@@ -191,7 +203,11 @@ public:
   const std::string &getSwiftProgramPath() const {
     return DriverExecutable;
   }
-  
+
+  ArrayRef<std::string> getSwiftProgramArgs() const {
+    return DriverExecutableArgs;
+  }
+
   DriverKind getDriverKind() const { return driverKind; }
   
   ArrayRef<const char *> getArgsWithoutProgramNameAndDriverMode(

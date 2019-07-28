@@ -778,14 +778,14 @@ tests.test("String.UTF8View/Collection")
   .forEach(in: utfTests) {
   test in
 
-  checkBidirectionalCollection(test.utf8, test.string.utf8) { $0 == $1 }
+  checkBidirectionalCollection(test.utf8, test.string.utf8)
 }
 
 tests.test("String.UTF16View/BidirectionalCollection")
   .forEach(in: utfTests) {
   test in
 
-  checkBidirectionalCollection(test.utf16, test.string.utf16) { $0 == $1 }
+  checkBidirectionalCollection(test.utf16, test.string.utf16)
 }
 
 tests.test("String.UTF32View/BidirectionalCollection")
@@ -793,7 +793,53 @@ tests.test("String.UTF32View/BidirectionalCollection")
   test in
 
   checkBidirectionalCollection(
-    test.unicodeScalars, test.string.unicodeScalars) { $0 == $1 }
+    test.unicodeScalars, test.string.unicodeScalars)
+}
+
+tests.test("String View Setters") {
+  var string = "abcd🤠👨‍👨‍👦‍👦efg"
+
+  string.utf8 = winter.utf8
+  expectEqual(winter, string)
+  string.utf8 = summer.utf8
+  expectEqual(summer, string)
+
+  string.utf16 = winter.utf16
+  expectEqual(winter, string)
+  string.utf16 = summer.utf16
+  expectEqual(summer, string)
+
+  string.unicodeScalars = winter.unicodeScalars
+  expectEqual(winter, string)
+  string.unicodeScalars = summer.unicodeScalars
+  expectEqual(summer, string)
+
+  string = winter
+  expectEqual(winter, string)
+  string = summer
+  expectEqual(summer, string)
+}
+
+tests.test("Scalar alignment") {
+  let str = "😀"
+  let idx = str.utf8.index(after: str.startIndex)
+  let substr = str[idx...]
+  expectEqual(str, substr)
+
+  checkBidirectionalCollection(str, substr)
+  checkBidirectionalCollection(str.utf16, substr.utf16)
+  checkBidirectionalCollection(str.utf8, substr.utf8)
+  checkBidirectionalCollection(str.unicodeScalars, substr.unicodeScalars)
+
+  let idxBeforeLast = str.utf8.index(before: str.endIndex)
+  let substr2 = str[idx...]
+  expectEqual(str, substr2)
+  expectEqual(substr, substr2)
+
+  checkBidirectionalCollection(str, substr2)
+  checkBidirectionalCollection(str.utf16, substr2.utf16)
+  checkBidirectionalCollection(str.utf8, substr2.utf8)
+  checkBidirectionalCollection(str.unicodeScalars, substr2.unicodeScalars)
 }
 
 runAllTests()

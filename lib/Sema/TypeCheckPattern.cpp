@@ -313,7 +313,7 @@ public:
   Pattern *visitExprPattern(ExprPattern *P) {
     if (P->isResolved())
       return P;
-    
+
     // Try to convert to a pattern.
     Pattern *exprAsPattern = visit(P->getSubExpr());
     // If we failed, keep the ExprPattern as is.
@@ -684,7 +684,29 @@ static bool validateTypedPattern(TypeChecker &TC,
     return TP->getType()->hasError();
 
   TypeLoc TL = TP->getTypeLoc();
-  bool hadError = TC.validateType(TL, resolution, options);
+  
+  bool hadError;
+  
+  // If the pattern declares an opaque type, and applies to a single
+  // variable binding, then we can bind the opaque return type from the
+  // property definition.
+  if (auto opaqueRepr = dyn_cast<OpaqueReturnTypeRepr>(TL.getTypeRepr())) {
+    auto named = dyn_cast<NamedPattern>(
+                           TP->getSubPattern()->getSemanticsProvidingPattern());
+    if (named) {
+      auto opaqueTy = TC.getOrCreateOpaqueResultType(resolution,
+                                                     named->getDecl(),
+                                                     opaqueRepr);
+      TL.setType(named->getDecl()->getDeclContext()
+                                 ->mapTypeIntoContext(opaqueTy));
+      hadError = opaqueTy->hasError();
+    } else {
+      TC.diagnose(TP->getLoc(), diag::opaque_type_unsupported_pattern);
+      hadError = true;
+    }
+  } else {
+    hadError = TC.validateType(TL, resolution, options);
+  }
 
   if (hadError) {
     TP->setType(ErrorType::get(TC.Context));
@@ -723,6 +745,7 @@ static bool validateParameterType(ParamDecl *decl, TypeResolution resolution,
   if (auto ty = decl->getTypeLoc().getType())
     return ty->hasError();
 
+  auto origContext = options.getContext();
   options.setContext(None);
 
   // If the element is a variadic parameter, resolve the parameter type as if
@@ -764,6 +787,12 @@ static bool validateParameterType(ParamDecl *decl, TypeResolution resolution,
       hadError = true;
     }
     TL.setType(Ty);
+
+    // Disallow variadic parameters in enum elements.
+    if (!hadError && origContext == TypeResolverContext::EnumElementDecl) {
+      TC.diagnose(decl->getStartLoc(), diag::enum_element_ellipsis);
+      hadError = true;
+    }
   }
 
   if (hadError)
@@ -849,12 +878,20 @@ bool TypeChecker::typeCheckParameterList(ParameterList *PL,
       }
 
       if (isa<InOutTypeRepr>(nestedRepr)) {
-        param->setSpecifier(VarDecl::Specifier::InOut);
+        param->setSpecifier(ParamDecl::Specifier::InOut);
       } else if (isa<SharedTypeRepr>(nestedRepr)) {
-        param->setSpecifier(VarDecl::Specifier::Shared);
+        param->setSpecifier(ParamDecl::Specifier::Shared);
       } else if (isa<OwnedTypeRepr>(nestedRepr)) {
-        param->setSpecifier(VarDecl::Specifier::Owned);
+        param->setSpecifier(ParamDecl::Specifier::Owned);
       }
+    }
+
+    if (param->isInOut() && param->isDefaultArgument()) {
+      diagnose(param->getDefaultValue()->getLoc(),
+               swift::diag::cannot_provide_default_value_inout,
+               param->getName());
+      param->markInvalid();
+      hadError = true;
     }
   }
   
@@ -1091,14 +1128,17 @@ recur:
     var->getTypeLoc().setType(var->getType());
 
     // If we are inferring a variable to have type AnyObject.Type,
-    // "()", or optional thereof, emit a diagnostic.  In the first 2 cases, the
-    // coder probably forgot a cast and expected a concrete type.  In the later
-    // case, they probably didn't mean to bind to a variable, or there is some
-    // other bug.  We always tell them that they can silence the warning with an
-    // explicit type annotation (and provide a fixit) as a note.
-    Type diagTy = type->getOptionalObjectType();
+    // "()", an uninhabited type, or optional thereof, emit a diagnostic.
+    // In the first 2 cases, the coder probably forgot a cast and expected a
+    // concrete type.  In the later case, they probably didn't mean to bind to
+    // a variable, or there is some other bug.  We always tell them that they
+    // can silence the warning with an explicit type annotation
+    // (and provide a fixit) as a note.
+    Type diagTy = type->lookThroughAllOptionalTypes();
+    bool isOptional = !type->getOptionalObjectType().isNull();
     if (!diagTy) diagTy = type;
     
+    auto diag = diag::type_inferred_to_undesirable_type;
     bool shouldRequireType = false;
     if (NP->isImplicit()) {
       // If the whole pattern is implicit, the user didn't write it.
@@ -1108,14 +1148,26 @@ recur:
     } else if (auto MTT = diagTy->getAs<AnyMetatypeType>()) {
       if (MTT->getInstanceType()->isAnyObject())
         shouldRequireType = true;
+    } else if (diagTy->isStructurallyUninhabited()) {
+      shouldRequireType = true;
+      diag = isOptional ? diag::type_inferred_to_undesirable_type
+                        : diag::type_inferred_to_uninhabited_type;
+
+      if (diagTy->is<TupleType>()) {
+        diag = isOptional ? diag::type_inferred_to_undesirable_type
+                          : diag::type_inferred_to_uninhabited_tuple_type;
+      } else {
+        assert((diagTy->is<EnumType>() || diagTy->is<BoundGenericEnumType>()) &&
+          "unknown structurally uninhabited type");
+      }
     }
     
     if (shouldRequireType &&
         !options.is(TypeResolverContext::ForEachStmt) &&
         !options.is(TypeResolverContext::EditorPlaceholderExpr) &&
         !(options & TypeResolutionFlags::FromNonInferredPattern)) {
-      diagnose(NP->getLoc(), diag::type_inferred_to_undesirable_type,
-               NP->getDecl()->getName(), type, NP->getDecl()->isLet());
+      diagnose(NP->getLoc(), diag, NP->getDecl()->getName(), type,
+               NP->getDecl()->isLet());
       diagnose(NP->getLoc(), diag::add_explicit_type_annotation_to_silence);
     }
 
@@ -1244,9 +1296,6 @@ recur:
 
     auto castType = IP->getCastTypeLoc().getType();
 
-    // Make sure we use any bridged NSError-related conformances.
-    useBridgedNSErrorConformances(dc, castType);
-
     // Determine whether we have an imbalance in the number of optionals.
     SmallVector<Type, 2> inputTypeOptionals;
     type->lookThroughAllOptionalTypes(inputTypeOptionals);
@@ -1369,20 +1418,31 @@ recur:
             goto recur;
           }
 
-          auto diag = diagnose(EEP->getLoc(),
-                               diag::enum_element_pattern_member_not_found,
-                               EEP->getName().str(), type);
-
-          // If we have an optional type let's try to see if the case
-          // exists in its base type, if so we can suggest a fix-it for that.
+          // If we have an optional type, let's try to see if the case
+          // exists in its base type and if it does then synthesize an
+          // OptionalSomePattern that wraps the case. This uses recursion
+          // to add multiple levels of OptionalSomePattern if the optional
+          // is nested.
           if (auto baseType = type->getOptionalObjectType()) {
-            if (lookupEnumMemberElement(*this, dc, baseType, EEP->getName(),
-                                        EEP->getLoc()))
-              diag.fixItInsertAfter(EEP->getEndLoc(), "?");
+            if (lookupEnumMemberElement(*this, dc,
+                                        baseType->lookThroughAllOptionalTypes(),
+                                        EEP->getName(), EEP->getLoc())) {
+              P = new (Context)
+                  OptionalSomePattern(EEP, EEP->getEndLoc(), /*implicit*/true);
+              return coercePatternToType(P, resolution, type, options);
+            } else {
+              diagnose(EEP->getLoc(),
+                       diag::enum_element_pattern_member_not_found,
+                       EEP->getName().str(), type);
+              return true;
+            }
           }
         }
-        return true;
       }
+
+      if (!elt)
+        return true;
+
       enumTy = type;
     } else {
       // Check if the explicitly-written enum type matches the type we're
@@ -1554,28 +1614,13 @@ recur:
 
 /// Coerce the specified parameter list of a ClosureExpr to the specified
 /// contextual type.
-///
-/// \returns true if an error occurred, false otherwise.
-///
-/// TODO: These diagnostics should be a lot better now that we know this is
-/// all specific to closures.
-///
-bool TypeChecker::coerceParameterListToType(ParameterList *P, ClosureExpr *CE,
+void TypeChecker::coerceParameterListToType(ParameterList *P, ClosureExpr *CE,
                                             AnyFunctionType *FN) {
-  llvm::SmallVector<AnyFunctionType::Param, 4> params;
-  params.reserve(FN->getNumParams());
-
-  bool hadError = false;
-  for (const auto &param : FN->getParams()) {
-    params.push_back(param);
-    hadError |= param.getOldType()->hasError();
-  }
 
   // Local function to check if the given type is valid e.g. doesn't have
   // errors, type variables or unresolved types related to it.
   auto isValidType = [](Type type) -> bool {
-    return !(type.isNull() || type->hasError() || type->hasUnresolvedType() ||
-             type->hasTypeVariable());
+    return !(type->hasError() || type->hasUnresolvedType());
   };
 
   // Local function to check whether type of given parameter
@@ -1590,31 +1635,9 @@ bool TypeChecker::coerceParameterListToType(ParameterList *P, ClosureExpr *CE,
     return true;
   };
 
-  // Sometimes a scalar type gets applied to a single-argument parameter list.
-  auto handleParameter = [&](ParamDecl *param, Type ty, bool forceMutable) -> bool {
-    bool hadError = false;
-    
-    // Check that the type, if explicitly spelled, is ok.
-    if (param->getTypeLoc().getTypeRepr()) {
-      hadError |= validateParameterType(param,
-                                        TypeResolution::forContextual(CE),
-                                        None, *this);
-      
-      // Now that we've type checked the explicit argument type, see if it
-      // agrees with the contextual type.
-      auto paramType = param->getTypeLoc().getType();
-      // Coerce explicitly specified argument type to contextual type
-      // only if both types are valid and do not match.
-      if (!hadError && isValidType(ty) && !ty->isEqual(paramType)) {
-        param->setType(ty);
-        param->setInterfaceType(ty->mapTypeOutOfContext());
-      }
-    }
-    
-    assert(ty->isMaterializable());
-    if (forceMutable) {
-      param->setSpecifier(VarDecl::Specifier::InOut);
-    }
+  auto handleParameter = [&](ParamDecl *param, Type ty, bool forceMutable) {
+    if (forceMutable)
+      param->setSpecifier(ParamDecl::Specifier::InOut);
 
     // If contextual type is invalid and we have a valid argument type
     // trying to coerce argument to contextual type would mean erasing
@@ -1625,76 +1648,18 @@ bool TypeChecker::coerceParameterListToType(ParameterList *P, ClosureExpr *CE,
     }
     
     checkTypeModifyingDeclAttributes(param);
-    return hadError;
   };
-
-  auto hasParenSugar = [](ArrayRef<AnyFunctionType::Param> params) -> bool {
-    if (params.size() == 1) {
-      const auto &param = params.front();
-      return (!param.hasLabel() &&
-              !param.isVariadic() &&
-              !param.isInOut());
-    }
-
-    return false;
-  };
-
-  auto getType = [](const AnyFunctionType::Param &param) -> Type {
-    return param.getParameterType();
-  };
-
-  // If the closure is called with a single argument of tuple type
-  // but the closure body expects multiple parameters, explode the
-  // tuple.
-  //
-  // FIXME: This looks like the wrong place for this; the constraint
-  // solver should have inserted an explicit conversion already.
-  //
-  // The only reason we can get away with this, I think, is that
-  // at the SIL level, recursive tuple expansion lowers
-  // ((T, U)) -> () and (T, U) -> () to the same function type,
-  // and SILGen doesn't enforce AST invariaints very strictly.
-  if (!hadError && hasParenSugar(params)) {
-    auto underlyingTy = params.front().getPlainType();
-    if (underlyingTy->is<TupleType>()) {
-      // If we're actually expecting a single parameter, handle it normally.
-      if (P->size() == 1)
-        return handleParameter(P->get(0), underlyingTy, /*mutable*/false);
-
-      // Otherwise, explode the tuple.
-      params.clear();
-      FunctionType::decomposeInput(underlyingTy, params);
-    }
-  }
-  
-  // The number of elements must match exactly.
-  // TODO: incomplete tuple patterns, with some syntax.
-  if (!hadError && params.size() != P->size()) {
-    auto fnType = FunctionType::get(params, FN->getResult());
-    diagnose(P->getStartLoc(), diag::closure_argument_list_tuple, fnType,
-             params.size(), P->size(), (P->size() == 1));
-    hadError = true;
-  }
 
   // Coerce each parameter to the respective type.
+  ArrayRef<AnyFunctionType::Param> params = FN->getParams();
   for (unsigned i = 0, e = P->size(); i != e; ++i) {
     auto &param = P->get(i);
-    
-    Type CoercionType;
-    bool isMutableParam = false;
-    if (hadError) {
-      CoercionType = ErrorType::get(Context);
-    } else {
-      CoercionType = getType(params[i]);
-      isMutableParam = params[i].isInOut();
-    }
-    
     assert(param->getArgumentName().empty() &&
            "Closures cannot have API names");
     
-    hadError |= handleParameter(param, CoercionType, isMutableParam);
+    handleParameter(param,
+                    params[i].getParameterType(),
+                    params[i].isInOut());
     assert(!param->isDefaultArgument() && "Closures cannot have default args");
   }
-  
-  return hadError;
 }

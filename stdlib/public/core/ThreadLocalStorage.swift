@@ -51,7 +51,7 @@ func _loadDestroyTLSCounter() -> Int {
 // _initializeThreadLocalStorage.
 //
 internal struct _ThreadLocalStorage {
-  // TODO: might be best to absract uBreakIterator handling and caching into
+  // TODO: might be best to abstract uBreakIterator handling and caching into
   // separate struct. That would also make it easier to maintain multiple ones
   // and other TLS entries side-by-side.
 
@@ -140,7 +140,7 @@ internal struct _ThreadLocalStorage {
 // owned.
 @_silgen_name("_stdlib_destroyTLS")
 internal func _destroyTLS(_ ptr: UnsafeMutableRawPointer?) {
-  _sanityCheck(ptr != nil,
+  _internalInvariant(ptr != nil,
     "_destroyTLS was called, but with nil...")
   let tlsPtr = ptr!.assumingMemoryBound(to: _ThreadLocalStorage.self)
   __swift_stdlib_ubrk_close(tlsPtr[0].uBreakIterator)

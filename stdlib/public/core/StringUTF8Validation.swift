@@ -7,7 +7,7 @@ private func _isNotOverlong_F0(_ x: UInt8) -> Bool {
 }
 
 private func _isNotOverlong_F4(_ x: UInt8) -> Bool {
-  return _isContinuation(x) && x <= 0x8F
+  return UTF8.isContinuation(x) && x <= 0x8F
 }
 
 private func _isNotOverlong_E0(_ x: UInt8) -> Bool {
@@ -15,11 +15,7 @@ private func _isNotOverlong_E0(_ x: UInt8) -> Bool {
 }
 
 private func _isNotOverlong_ED(_ x: UInt8) -> Bool {
-  return _isContinuation(x) && x <= 0x9F
-}
-
-private func _isASCII_cmp(_ x: UInt8) -> Bool {
-  return x <= 0x7F
+  return UTF8.isContinuation(x) && x <= 0x9F
 }
 
 internal struct UTF8ExtraInfo: Equatable {
@@ -36,6 +32,10 @@ extension UTF8ValidationResult: Equatable {}
 private struct UTF8ValidationError: Error {}
 
 internal func validateUTF8(_ buf: UnsafeBufferPointer<UInt8>) -> UTF8ValidationResult {
+  if _allASCII(buf) {
+    return .success(UTF8ExtraInfo(isASCII: true))
+  }
+
   var iter = buf.makeIterator()
   var lastValidIndex = buf.startIndex
 
@@ -44,7 +44,7 @@ internal func validateUTF8(_ buf: UnsafeBufferPointer<UInt8>) -> UTF8ValidationR
     guard f(cu) else { throw UTF8ValidationError() }
   }
   @inline(__always) func guaranteeContinuation() throws {
-    try guaranteeIn(_isContinuation)
+    try guaranteeIn(UTF8.isContinuation)
   }
 
   func _legacyInvalidLengthCalculation(_ _buffer: (_storage: UInt32, ())) -> Int {
@@ -90,11 +90,11 @@ internal func validateUTF8(_ buf: UnsafeBufferPointer<UInt8>) -> UTF8ValidationR
     var endIndex = buf.startIndex
     var iter = buf.makeIterator()
     _ = iter.next()
-    while let cu = iter.next(), !_isASCII(cu) && !_isUTF8MultiByteLeading(cu) {
+    while let cu = iter.next(), UTF8.isContinuation(cu) {
       endIndex += 1
     }
     let illegalRange = Range(buf.startIndex...endIndex)
-    _sanityCheck(illegalRange.clamped(to: (buf.startIndex..<buf.endIndex)) == illegalRange,
+    _internalInvariant(illegalRange.clamped(to: (buf.startIndex..<buf.endIndex)) == illegalRange,
                  "illegal range out of full range")
     // FIXME: Remove the call to `_legacyNarrowIllegalRange` and return `illegalRange` directly
     return _legacyNarrowIllegalRange(buf: buf[illegalRange])
@@ -103,7 +103,7 @@ internal func validateUTF8(_ buf: UnsafeBufferPointer<UInt8>) -> UTF8ValidationR
   do {
     var isASCII = true
     while let cu = iter.next() {
-      if _isASCII(cu) { lastValidIndex &+= 1; continue }
+      if UTF8.isASCII(cu) { lastValidIndex &+= 1; continue }
       isASCII = false
       if _slowPath(!_isUTF8MultiByteLeading(cu)) {
         throw UTF8ValidationError()
@@ -154,8 +154,8 @@ internal func validateUTF8(_ buf: UnsafeBufferPointer<UInt8>) -> UTF8ValidationR
 }
 
 internal func repairUTF8(_ input: UnsafeBufferPointer<UInt8>, firstKnownBrokenRange: Range<Int>) -> String {
-  _sanityCheck(input.count > 0, "empty input doesn't need to be repaired")
-  _sanityCheck(firstKnownBrokenRange.clamped(to: input.indices) == firstKnownBrokenRange)
+  _internalInvariant(!input.isEmpty, "empty input doesn't need to be repaired")
+  _internalInvariant(firstKnownBrokenRange.clamped(to: input.indices) == firstKnownBrokenRange)
   // During this process, `remainingInput` contains the remaining bytes to process. It's split into three
   // non-overlapping sub-regions:
   //
@@ -176,8 +176,8 @@ internal func repairUTF8(_ input: UnsafeBufferPointer<UInt8>, firstKnownBrokenRa
   var brokenRange: Range<Int> = firstKnownBrokenRange
   var remainingInput = input
   repeat {
-    _sanityCheck(brokenRange.count > 0, "broken range empty")
-    _sanityCheck(remainingInput.count > 0, "empty remaining input doesn't need to be repaired")
+    _internalInvariant(!brokenRange.isEmpty, "broken range empty")
+    _internalInvariant(!remainingInput.isEmpty, "empty remaining input doesn't need to be repaired")
     let goodChunk = remainingInput[..<brokenRange.startIndex]
 
     // very likely this capacity reservation does not actually do anything because we reserved space for the entire
@@ -199,6 +199,6 @@ internal func repairUTF8(_ input: UnsafeBufferPointer<UInt8>, firstKnownBrokenRa
     case .error(let newBrokenRange):
       brokenRange = newBrokenRange
     }
-  } while remainingInput.count > 0
+  } while !remainingInput.isEmpty
   return String(result)
 }

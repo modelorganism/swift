@@ -76,7 +76,7 @@ extension _StringGuts {
   internal mutating func grow(_ n: Int) {
     defer { self._invariantCheck() }
 
-    _sanityCheck(
+    _internalInvariant(
       self.uniqueNativeCapacity == nil || self.uniqueNativeCapacity! < n)
 
     let growthTarget = Swift.max(n, (self.uniqueNativeCapacity ?? 0) * 2)
@@ -84,7 +84,7 @@ extension _StringGuts {
     if _fastPath(isFastUTF8) {
       let isASCII = self.isASCII
       let storage = self.withFastUTF8 {
-        _StringStorage.create(
+        __StringStorage.create(
           initializingFrom: $0, capacity: growthTarget, isASCII: isASCII)
       }
 
@@ -101,7 +101,7 @@ extension _StringGuts {
     // into a StringStorage space.
     let selfUTF8 = Array(String(self).utf8)
     selfUTF8.withUnsafeBufferPointer {
-      self = _StringGuts(_StringStorage.create(
+      self = _StringGuts(__StringStorage.create(
         initializingFrom: $0, capacity: n, isASCII: self.isASCII))
     }
   }
@@ -112,9 +112,9 @@ extension _StringGuts {
     otherUTF8Count otherCount: Int
   ) {
     defer {
-      _sanityCheck(self.uniqueNativeUnusedCapacity != nil,
+      _internalInvariant(self.uniqueNativeUnusedCapacity != nil,
         "growth should produce uniqueness")
-      _sanityCheck(self.uniqueNativeUnusedCapacity! >= otherCount,
+      _internalInvariant(self.uniqueNativeUnusedCapacity! >= otherCount,
         "growth should produce enough capacity")
     }
 
@@ -195,8 +195,8 @@ extension _StringGuts {
 
   @inline(never) // slow-path
   private mutating func _foreignAppendInPlace(_ other: _StringGutsSlice) {
-    _sanityCheck(!other.isFastUTF8)
-    _sanityCheck(self.uniqueNativeUnusedCapacity != nil)
+    _internalInvariant(!other.isFastUTF8)
+    _internalInvariant(self.uniqueNativeUnusedCapacity != nil)
 
     var iter = Substring(other).utf8.makeIterator()
     self._object.nativeStorage.appendInPlace(&iter, isASCII: other.isASCII)
@@ -218,10 +218,10 @@ extension _StringGuts {
   }
 
   internal mutating func remove(from lower: Index, to upper: Index) {
-    let lowerOffset = lower.encodedOffset
-    let upperOffset = upper.encodedOffset
-    _sanityCheck(lower.transcodedOffset == 0 && upper.transcodedOffset == 0)
-    _sanityCheck(lowerOffset <= upperOffset && upperOffset <= self.count)
+    let lowerOffset = lower._encodedOffset
+    let upperOffset = upper._encodedOffset
+    _internalInvariant(lower.transcodedOffset == 0 && upper.transcodedOffset == 0)
+    _internalInvariant(lowerOffset <= upperOffset && upperOffset <= self.count)
 
     if isUniqueNative {
       _object.nativeStorage.remove(from: lowerOffset, to: upperOffset)
@@ -246,7 +246,7 @@ extension _StringGuts {
   internal mutating func replaceSubrange<C>(
     _ bounds: Range<Index>,
     with newElements: C
-  ) where C : Collection, C.Iterator.Element == Character {
+  ) where C: Collection, C.Iterator.Element == Character {
     if isUniqueNative {
       if let replStr = newElements as? String, replStr._guts.isFastUTF8 {
         replStr._guts.withFastUTF8 {
@@ -279,16 +279,16 @@ extension _StringGuts {
     isASCII: Bool
   ) {
     let neededCapacity =
-      bounds.lowerBound.encodedOffset
-      + codeUnits.count + (self.count - bounds.upperBound.encodedOffset)
+      bounds.lowerBound._encodedOffset
+      + codeUnits.count + (self.count - bounds.upperBound._encodedOffset)
     reserveCapacity(neededCapacity)
 
-    _sanityCheck(bounds.lowerBound.transcodedOffset == 0)
-    _sanityCheck(bounds.upperBound.transcodedOffset == 0)
+    _internalInvariant(bounds.lowerBound.transcodedOffset == 0)
+    _internalInvariant(bounds.upperBound.transcodedOffset == 0)
 
     _object.nativeStorage.replace(
-      from: bounds.lowerBound.encodedOffset,
-      to: bounds.upperBound.encodedOffset,
+      from: bounds.lowerBound._encodedOffset,
+      to: bounds.upperBound._encodedOffset,
       with: codeUnits)
     self = _StringGuts(_object.nativeStorage)
   }
@@ -300,16 +300,16 @@ extension _StringGuts {
     let replCount = codeUnits.count
 
     let neededCapacity =
-      bounds.lowerBound.encodedOffset
-      + replCount + (self.count - bounds.upperBound.encodedOffset)
+      bounds.lowerBound._encodedOffset
+      + replCount + (self.count - bounds.upperBound._encodedOffset)
     reserveCapacity(neededCapacity)
 
-    _sanityCheck(bounds.lowerBound.transcodedOffset == 0)
-    _sanityCheck(bounds.upperBound.transcodedOffset == 0)
+    _internalInvariant(bounds.lowerBound.transcodedOffset == 0)
+    _internalInvariant(bounds.upperBound.transcodedOffset == 0)
 
     _object.nativeStorage.replace(
-      from: bounds.lowerBound.encodedOffset,
-      to: bounds.upperBound.encodedOffset,
+      from: bounds.lowerBound._encodedOffset,
+      to: bounds.upperBound._encodedOffset,
       with: codeUnits,
       replacementCount: replCount)
     self = _StringGuts(_object.nativeStorage)

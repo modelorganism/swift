@@ -176,7 +176,7 @@ typeCheckREPLInput(ModuleDecl *MostRecentModule, StringRef Name,
 
   SmallVector<ModuleDecl::ImportedModule, 8> Imports;
   MostRecentModule->getImportedModules(Imports,
-                                       ModuleDecl::ImportFilter::Private);
+                                       ModuleDecl::ImportFilterKind::Private);
   if (!Imports.empty()) {
     SmallVector<SourceFile::ImportedModuleDesc, 8> ImportsWithOptions;
     for (auto Import : Imports) {
@@ -876,6 +876,7 @@ private:
       // non-whole-module generation.
       sil = performSILGeneration(*M->getFiles().front(), CI.getSILOptions());
       runSILDiagnosticPasses(*sil);
+      runSILOwnershipEliminatorPass(*sil);
       runSILLoweringPasses(*sil);
     }
 
@@ -968,7 +969,7 @@ public:
     ASTContext &Ctx = CI.getASTContext();
     Ctx.LangOpts.EnableAccessControl = false;
     if (!ParseStdlib) {
-      if (!loadSwiftRuntime(Ctx.SearchPathOpts.RuntimeLibraryPath)) {
+      if (!loadSwiftRuntime(Ctx.SearchPathOpts.RuntimeLibraryPaths)) {
         CI.getDiags().diagnose(SourceLoc(),
                                diag::error_immediate_mode_missing_stdlib);
         return;
@@ -1053,7 +1054,7 @@ public:
         unsigned BufferID =
             CI.getSourceMgr().addMemBufferCopy(Line, "<REPL Input>");
         Lexer L(CI.getASTContext().LangOpts,
-                CI.getSourceMgr(), BufferID, nullptr, false /*not SIL*/);
+                CI.getSourceMgr(), BufferID, nullptr, LexerMode::Swift);
         Token Tok;
         L.lex(Tok);
         assert(Tok.is(tok::colon));
