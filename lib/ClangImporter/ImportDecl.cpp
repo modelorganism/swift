@@ -36,6 +36,7 @@
 #include "swift/AST/ProtocolConformance.h"
 #include "swift/AST/Stmt.h"
 #include "swift/AST/Types.h"
+#include "swift/AST/TypeCheckRequests.h"
 #include "swift/Basic/Defer.h"
 #include "swift/Basic/PrettyStackTrace.h"
 #include "swift/ClangImporter/ClangModule.h"
@@ -592,9 +593,9 @@ synthesizeEnumRawValueGetterBody(AbstractFunctionDecl *afd, void *context) {
 //   }
 // Unlike a standard init(rawValue:) enum initializer, this does a reinterpret
 // cast in order to preserve unknown or future cases from C.
-static AccessorDecl *makeEnumRawValueGetter(ClangImporter::Implementation &Impl,
-                                            EnumDecl *enumDecl,
-                                            VarDecl *rawValueDecl) {
+static void makeEnumRawValueGetter(ClangImporter::Implementation &Impl,
+                                   EnumDecl *enumDecl,
+                                   VarDecl *rawValueDecl) {
   ASTContext &C = Impl.SwiftContext;
 
   auto rawTy = enumDecl->getRawType();
@@ -622,7 +623,6 @@ static AccessorDecl *makeEnumRawValueGetter(ClangImporter::Implementation &Impl,
   getterDecl->setAccess(AccessLevel::Public);
   getterDecl->setBodySynthesizer(synthesizeEnumRawValueGetterBody, enumDecl);
   makeComputed(rawValueDecl, getterDecl, nullptr);
-  return getterDecl;
 }
 
 /// Synthesizer for the rawValue getter for an imported struct.
@@ -1550,7 +1550,6 @@ static void makeStructRawValued(
   structDecl->addMember(initRawValue);
   structDecl->addMember(patternBinding);
   structDecl->addMember(var);
-  structDecl->addMember(varGetter);
 
   addSynthesizedTypealias(structDecl, ctx.Id_RawValue, underlyingType);
   Impl.RawTypes[structDecl] = underlyingType;
@@ -1701,7 +1700,6 @@ static void makeStructRawValuedWithBridge(
   structDecl->addMember(storedVar);
   structDecl->addMember(computedPatternBinding);
   structDecl->addMember(computedVar);
-  structDecl->addMember(computedVarGetter);
 
   addSynthesizedTypealias(structDecl, ctx.Id_RawValue, bridgedType);
   Impl.RawTypes[structDecl] = bridgedType;
@@ -1982,7 +1980,6 @@ static bool addErrorDomain(NominalTypeDecl *swiftDecl,
   getterDecl->setIsDynamic(false);
 
   swiftDecl->addMember(errorDomainPropertyDecl);
-  swiftDecl->addMember(getterDecl);
   makeComputed(errorDomainPropertyDecl, getterDecl, nullptr);
 
   getterDecl->setImplicit();
@@ -2372,8 +2369,25 @@ namespace {
     }
 
     Decl *VisitNamespaceDecl(const clang::NamespaceDecl *decl) {
-      // FIXME: Implement once Swift has namespaces.
-      return nullptr;
+      // If we have a name for this declaration, use it.
+      Optional<ImportedName> correctSwiftName;
+      auto importedName = importFullName(decl, correctSwiftName);
+      if (!importedName) return nullptr;
+
+      auto dc =
+          Impl.importDeclContextOf(decl, importedName.getEffectiveContext());
+      if (!dc)
+        return nullptr;
+
+      SourceLoc loc = Impl.importSourceLoc(decl->getBeginLoc());
+
+      // FIXME: If Swift gets namespaces, import as a namespace.
+      auto enumDecl = Impl.createDeclWithClangNode<EnumDecl>(
+          decl, AccessLevel::Public, loc,
+          importedName.getDeclName().getBaseIdentifier(),
+          Impl.importSourceLoc(decl->getLocation()), None, nullptr, dc);
+      enumDecl->computeType();
+      return enumDecl;
     }
 
     Decl *VisitUsingDirectiveDecl(const clang::UsingDirectiveDecl *decl) {
@@ -2914,10 +2928,9 @@ namespace {
             C, StaticSpellingKind::None, varPattern, /*InitExpr*/ nullptr,
             enumDecl);
 
-        auto rawValueGetter = makeEnumRawValueGetter(Impl, enumDecl, rawValue);
+        makeEnumRawValueGetter(Impl, enumDecl, rawValue);
 
         enumDecl->addMember(rawValueConstructor);
-        enumDecl->addMember(rawValueGetter);
         enumDecl->addMember(rawValue);
         enumDecl->addMember(rawValueBinding);
 
@@ -3116,8 +3129,6 @@ namespace {
           auto addDecl = [&](NominalTypeDecl *nominal, Decl *decl) {
             if (!decl) return;
             nominal->addMember(decl);
-            if (auto *var = dyn_cast<VarDecl>(decl))
-              nominal->addMember(var->getGetter());
           };
 
           addDecl(result, enumeratorDecl);
@@ -5695,7 +5706,8 @@ Decl *SwiftDeclConverter::importGlobalAsInitializer(
       initOptionality, /*FailabilityLoc=*/SourceLoc(),
       /*Throws=*/false, /*ThrowsLoc=*/SourceLoc(), parameterList,
       /*GenericParams=*/nullptr, dc);
-  result->setInitKind(initKind);
+  result->getASTContext().evaluator.cacheOutput(InitKindRequest{result},
+                                                std::move(initKind));
   result->setImportAsStaticMember();
 
   // Set the constructor's type.
@@ -6324,7 +6336,8 @@ ConstructorDecl *SwiftDeclConverter::importConstructor(
     result->setImplicit();
 
   // Set the kind of initializer.
-  result->setInitKind(kind);
+  result->getASTContext().evaluator.cacheOutput(InitKindRequest{result},
+                                                std::move(kind));
 
   // Consult API notes to determine whether this initializer is required.
   if (!required && isRequiredInitializer(objcMethod))
@@ -8509,11 +8522,13 @@ bool ClangImporter::Implementation::addMemberAndAlternatesToExtension(
   member = findMemberThatWillLandInAnExtensionContext(member);
   if (!member || member->getDeclContext() != ext)
     return true;
-  ext->addMember(member);
+  if (!isa<AccessorDecl>(member))
+    ext->addMember(member);
 
   for (auto alternate : getAlternateDecls(member)) {
     if (alternate->getDeclContext() == ext)
-      ext->addMember(alternate);
+      if (!isa<AccessorDecl>(alternate))
+        ext->addMember(alternate);
   }
   return true;
 }
